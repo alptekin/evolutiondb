@@ -138,6 +138,14 @@ _Static_assert(sizeof(FileHeader) == EVO_PAGE_SIZE,
  * Must be called once at server startup, AFTER bp_init(). */
 int  pgm_init(const char *filepath);
 
+/* Non-zero if the most recent pgm_init() found an EXISTING data file it could
+ * not open (corrupt header, bad page size, or a wrong/missing encryption
+ * passphrase). The void init call chain cannot propagate pgm_init()'s -1, so a
+ * caller that must FAIL CLOSED on an unopenable/undecryptable database (rather
+ * than serve it) consults this after server_init_ex() and exits before binding
+ * any listener. 0 for a freshly created database. */
+int  pgm_open_failed(void);
+
 /* Shut down: flush all dirty pages and close the file. */
 void pgm_shutdown(void);
 
