@@ -56,29 +56,13 @@ def llm_adjudicate(new_fact: str, old_fact: str, backend: str) -> str:
               "different things answer ADD; if identical answer NOOP. Reply with "
               "exactly one word: ADD, UPDATE, DELETE, or NOOP.")
     backend = backend.lower()
-    if backend == "ollama":
-        import requests
-        host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-        model = os.environ.get("EVOSQL_RECONCILE_LLM_MODEL", "llama3.1")
-        from . import pii_egress, provider_policy
-        provider_policy.check("ollama", endpoint=host)
-        prompt = pii_egress.scrub(prompt)
-        r = requests.post(f"{host}/api/generate",
-                          json={"model": model, "prompt": prompt,
-                                "stream": False}, timeout=60)
-        word = (r.json().get("response") or "").strip().upper()
-    elif backend in ("anthropic", "sonnet"):
-        from . import pii_egress, provider_policy
-        provider_policy.check("anthropic", endpoint=provider_policy.anthropic_endpoint())
-        prompt = pii_egress.scrub(prompt)
-        import anthropic
-        c = anthropic.Anthropic()
-        m = c.messages.create(
-            model=os.environ.get("EVOSQL_RECONCILE_LLM_MODEL", "claude-sonnet-4-6"),
-            max_tokens=8, messages=[{"role": "user", "content": prompt}])
-        word = m.content[0].text.strip().upper()
-    else:
+    default = "claude-sonnet-4-6" if backend in ("anthropic", "sonnet") else "llama3.1"
+    model = os.environ.get("EVOSQL_RECONCILE_LLM_MODEL", default)
+    from . import llm
+    if not llm.available(backend):
         raise RuntimeError(f"unknown EVOSQL_RECONCILE_LLM backend: {backend}")
+    word = (llm.chat(prompt, provider=backend, model=model, max_tokens=8)
+            or "").strip().upper()
     for v in VERDICTS:
         if v in word:
             return v
@@ -97,29 +81,13 @@ def llm_reconsolidate(old_fact: str, correction: str, backend: str) -> str:
               "CONTRADICT; if it just agrees answer CONFIRM. One word: CONFIRM, "
               "REFINE, or CONTRADICT.")
     backend = backend.lower()
-    if backend == "ollama":
-        import requests
-        host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-        model = os.environ.get("EVOSQL_RECONSOLIDATE_LLM_MODEL", "llama3.1")
-        from . import pii_egress, provider_policy
-        provider_policy.check("ollama", endpoint=host)
-        prompt = pii_egress.scrub(prompt)
-        r = requests.post(f"{host}/api/generate",
-                          json={"model": model, "prompt": prompt,
-                                "stream": False}, timeout=60)
-        word = (r.json().get("response") or "").strip().upper()
-    elif backend in ("anthropic", "sonnet"):
-        from . import pii_egress, provider_policy
-        provider_policy.check("anthropic", endpoint=provider_policy.anthropic_endpoint())
-        prompt = pii_egress.scrub(prompt)
-        import anthropic
-        c = anthropic.Anthropic()
-        m = c.messages.create(
-            model=os.environ.get("EVOSQL_RECONSOLIDATE_LLM_MODEL", "claude-sonnet-4-6"),
-            max_tokens=8, messages=[{"role": "user", "content": prompt}])
-        word = m.content[0].text.strip().upper()
-    else:
+    default = "claude-sonnet-4-6" if backend in ("anthropic", "sonnet") else "llama3.1"
+    model = os.environ.get("EVOSQL_RECONSOLIDATE_LLM_MODEL", default)
+    from . import llm
+    if not llm.available(backend):
         raise RuntimeError(f"unknown EVOSQL_RECONSOLIDATE_LLM backend: {backend}")
+    word = (llm.chat(prompt, provider=backend, model=model, max_tokens=8)
+            or "").strip().upper()
     for v in RECONSOLIDATE_VERDICTS:
         if v in word:
             return v

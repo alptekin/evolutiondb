@@ -58,28 +58,13 @@ def _llm_generalize(facts: Sequence[str], backend: str) -> str:
               "NOT a recap of events. Answer in a single sentence.\n\n"
               + "\n".join(f"- {f}" for f in facts))
     backend = backend.lower()
-    if backend == "ollama":
-        import requests
-        host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-        model = os.environ.get("EVOSQL_SEMANTIC_LLM_MODEL", "llama3.1")
-        from . import pii_egress, provider_policy
-        provider_policy.check("ollama", endpoint=host)
-        prompt = pii_egress.scrub(prompt)
-        r = requests.post(f"{host}/api/generate",
-                          json={"model": model, "prompt": prompt,
-                                "stream": False}, timeout=90)
-        return (r.json().get("response") or "").strip()
-    if backend in ("anthropic", "sonnet"):
-        from . import pii_egress, provider_policy
-        provider_policy.check("anthropic", endpoint=provider_policy.anthropic_endpoint())
-        prompt = pii_egress.scrub(prompt)
-        import anthropic
-        c = anthropic.Anthropic()
-        m = c.messages.create(
-            model=os.environ.get("EVOSQL_SEMANTIC_LLM_MODEL", "claude-sonnet-4-6"),
-            max_tokens=120, messages=[{"role": "user", "content": prompt}])
-        return m.content[0].text.strip()
-    raise RuntimeError(f"unknown EVOSQL_SEMANTIC_LLM backend: {backend}")
+    default = "claude-sonnet-4-6" if backend in ("anthropic", "sonnet") else "llama3.1"
+    model = os.environ.get("EVOSQL_SEMANTIC_LLM_MODEL", default)
+    from . import llm
+    if not llm.available(backend):
+        raise RuntimeError(f"unknown EVOSQL_SEMANTIC_LLM backend: {backend}")
+    return (llm.chat(prompt, provider=backend, model=model, max_tokens=120)
+            or "").strip()
 
 
 def semanticize(backend, user_id: str, *,

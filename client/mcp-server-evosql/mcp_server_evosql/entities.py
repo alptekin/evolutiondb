@@ -235,33 +235,14 @@ def _llm_extract(text: str, backend: str) -> List[Mention]:
     prompt = ("Extract named entities (person, org, email, phone, iban, tckn) "
               "from the text. Return JSON list of {surface,type,start,end}. "
               "Text:\n" + text)
-    if backend == "ollama":
-        import urllib.request
-        host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-        model = os.environ.get("EVOSQL_ENTITY_LLM_MODEL", "llama3.1")
-        from . import pii_egress, provider_policy
-        provider_policy.check("ollama", endpoint=host)
-        prompt = pii_egress.scrub(prompt)
-        body = json.dumps({"model": model, "prompt": prompt, "stream": False,
-                           "format": "json"}).encode()
-        req = urllib.request.Request(host + "/api/generate", body,
-                                     {"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            data = json.loads(r.read().decode())
-        parsed = json.loads(data.get("response", "[]"))
-        return parsed if isinstance(parsed, list) else parsed.get("entities", [])
-    if backend in ("anthropic", "sonnet"):
-        from . import pii_egress, provider_policy
-        provider_policy.check("anthropic", endpoint=provider_policy.anthropic_endpoint())
-        prompt = pii_egress.scrub(prompt)
-        import anthropic
-        c = anthropic.Anthropic()
-        msg = c.messages.create(
-            model=os.environ.get("EVOSQL_ENTITY_LLM_MODEL", "claude-sonnet-4-6"),
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}])
-        return json.loads(msg.content[0].text)
-    return []
+    default = "claude-sonnet-4-6" if backend in ("anthropic", "sonnet") else "llama3.1"
+    model = os.environ.get("EVOSQL_ENTITY_LLM_MODEL", default)
+    from . import llm
+    if not llm.available(backend):
+        return []
+    out = llm.chat(prompt, provider=backend, model=model, max_tokens=1024)
+    parsed = json.loads(out or "[]")
+    return parsed if isinstance(parsed, list) else parsed.get("entities", [])
 
 
 def extract_entities(text: str) -> List[Mention]:
