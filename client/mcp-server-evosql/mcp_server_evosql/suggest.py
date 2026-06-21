@@ -101,15 +101,12 @@ def draft_reply(thread_msgs, loop, self_role, name, language) -> str:
         f"Return ONLY the reply text.\n\n"
         f"Conversation (most recent last):\n{convo}")
     try:
-        from . import pii_egress, provider_policy
-        provider_policy.check("anthropic", endpoint=provider_policy.anthropic_endpoint())
-        prompt = pii_egress.scrub(prompt)
-        import anthropic
-        c = anthropic.Anthropic()
-        msg = c.messages.create(
+        from . import llm
+        out = llm.chat(
+            prompt, provider="anthropic",
             model=os.environ.get("EVOSQL_LOOP_LLM_MODEL", "claude-haiku-4-5-20251001"),
-            max_tokens=500, messages=[{"role": "user", "content": prompt}])
-        return msg.content[0].text.strip()
+            max_tokens=500)
+        return (out or "").strip()
     except Exception as exc:
         return f"(taslak üretilemedi: {str(exc)[:100]})"
 
