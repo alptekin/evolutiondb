@@ -3634,6 +3634,61 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
         return 1;
     }
 
+    /* pg_indexes — secondary indexes (name + columns + unique) so a migration
+     * tool can recreate them. MUST precede the pg_index empty-stub below, since
+     * "pg_indexes" contains the substring "pg_index". */
+    if (stristr_found(sql, "pg_indexes")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "schemaname", PG_OID_TEXT);
+        result_add_column(rs, "tablename", PG_OID_TEXT);
+        result_add_column(rs, "indexname", PG_OID_TEXT);
+        result_add_column(rs, "tablespace", PG_OID_TEXT);
+        result_add_column(rs, "indexdef", PG_OID_TEXT);
+        int pic = 0;
+        DatabaseDesc dbidx;
+        if (cat_find_database(db_get_current_database(), &dbidx) == 0) {
+            SchemaDesc *schemas = NULL;
+            int ns = cat_list_schemas_all(dbidx.db_id, &schemas);
+            if (ns < 0) ns = 0;
+            for (int si = 0; si < ns; si++) {
+                TableDesc *tables = NULL;
+                int nt = cat_list_tables_all(schemas[si].schema_id, &tables);
+                if (nt < 0) nt = 0;
+                for (int ti = 0; ti < nt; ti++) {
+                    IndexDesc *idxs = NULL;
+                    int nidx = cat_list_indexes_all(tables[ti].table_id, &idxs);
+                    if (nidx < 0) nidx = 0;
+                    for (int ii = 0; ii < nidx; ii++) {
+                        if (idxs[ii].index_type == 'P') continue;   /* PK is not a 2nd index */
+                        if (idxs[ii].expr_def[0]) continue;         /* expression index: skip (v1) */
+                        const char *uniq = (idxs[ii].index_type == 'U' ||
+                                            idxs[ii].index_type == 'V') ? "UNIQUE " : "";
+                        const char *ushash = (idxs[ii].index_type == 'H' ||
+                                              idxs[ii].index_type == 'V') ? " USING HASH" : "";
+                        char def[1200];
+                        snprintf(def, sizeof(def), "CREATE %sINDEX %s ON %s%s (%s)",
+                                 uniq, idxs[ii].index_name, tables[ti].table_name,
+                                 ushash, idxs[ii].col_list);
+                        int r = result_add_row(rs);
+                        if (r < 0) break;
+                        result_set_field(rs, r, 0, schemas[si].schema_name);
+                        result_set_field(rs, r, 1, tables[ti].table_name);
+                        result_set_field(rs, r, 2, idxs[ii].index_name);
+                        result_set_field(rs, r, 3, "");
+                        result_set_field(rs, r, 4, def);
+                        pic++;
+                    }
+                    free(idxs);
+                }
+                free(tables);
+            }
+            free(schemas);
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", pic);
+        return 1;
+    }
+
     /* pg_am, pg_roles, etc. — return empty */
     if (stristr_found(sql, "pg_am") || stristr_found(sql, "pg_roles") ||
         stristr_found(sql, "pg_user") || stristr_found(sql, "pg_stat") ||
@@ -3832,6 +3887,91 @@ static int handle_information_schema(const char *sql, ResultSet *rs)
         }
 
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", schcount);
+        return 1;
+    }
+
+    /* information_schema.key_column_usage — which COLUMN(s) each PK / UNIQUE
+     * constraint covers, so a migration tool can recreate the primary key.
+     * Plain CREATE TABLE PKs leave NO 'P' constraint row, so PK columns come
+     * from ColumnDesc.is_pk (column-definition order); UNIQUE from the 'U'
+     * constraint's definition (its column list). */
+    if (stristr_found(sql, "key_column_usage")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "constraint_name", PG_OID_TEXT);
+        result_add_column(rs, "table_name", PG_OID_TEXT);
+        result_add_column(rs, "column_name", PG_OID_TEXT);
+        result_add_column(rs, "ordinal_position", PG_OID_TEXT);
+        int kcu = 0;
+        DatabaseDesc dbkcu;
+        if (cat_find_database(db_get_current_database(), &dbkcu) == 0) {
+            SchemaDesc *schemas = NULL;
+            int ns = cat_list_schemas_all(dbkcu.db_id, &schemas);
+            if (ns < 0) ns = 0;
+            for (int si = 0; si < ns; si++) {
+                TableDesc *tables = NULL;
+                int nt = cat_list_tables_all(schemas[si].schema_id, &tables);
+                if (nt < 0) nt = 0;
+                for (int ti = 0; ti < nt; ti++) {
+                    /* PRIMARY KEY columns from is_pk. */
+                    ColumnDesc cols[CAT_MAX_COLUMNS];
+                    int nc = cat_find_columns(tables[ti].table_id, cols, CAT_MAX_COLUMNS);
+                    if (nc < 0) nc = 0;
+                    char pkname[256];
+                    snprintf(pkname, sizeof(pkname), "%s_pkey", tables[ti].table_name);
+                    int pkpos = 0;
+                    for (int c = 0; c < nc; c++) {
+                        if (cols[c].is_dropped || !cols[c].is_pk) continue;
+                        pkpos++;
+                        char ord[16]; snprintf(ord, sizeof(ord), "%d", pkpos);
+                        int r = result_add_row(rs);
+                        if (r < 0) break;
+                        result_set_field(rs, r, 0, pkname);
+                        result_set_field(rs, r, 1, tables[ti].table_name);
+                        result_set_field(rs, r, 2, cols[c].col_name);
+                        result_set_field(rs, r, 3, ord);
+                        kcu++;
+                    }
+                    /* UNIQUE constraint columns (definition = the column list). */
+                    ConstraintDesc *cons = NULL;
+                    int ncons = cat_list_constraints_all(tables[ti].table_id, &cons);
+                    if (ncons < 0) ncons = 0;
+                    for (int ci = 0; ci < ncons; ci++) {
+                        if (cons[ci].constraint_type != 'U') continue;
+                        char uname[256];
+                        if (cons[ci].constraint_name[0])
+                            snprintf(uname, sizeof(uname), "%s", cons[ci].constraint_name);
+                        else
+                            snprintf(uname, sizeof(uname), "%s_uq_%d", tables[ti].table_name, ci);
+                        char def[1024];
+                        snprintf(def, sizeof(def), "%s", cons[ci].definition);
+                        char *save = NULL, *tok = strtok_r(def, ",", &save);
+                        int upos = 0;
+                        while (tok) {
+                            while (*tok == ' ') tok++;
+                            size_t L = strlen(tok);
+                            while (L > 0 && tok[L - 1] == ' ') tok[--L] = '\0';
+                            if (*tok) {
+                                upos++;
+                                char ord[16]; snprintf(ord, sizeof(ord), "%d", upos);
+                                int r = result_add_row(rs);
+                                if (r < 0) break;
+                                result_set_field(rs, r, 0, uname);
+                                result_set_field(rs, r, 1, tables[ti].table_name);
+                                result_set_field(rs, r, 2, tok);
+                                result_set_field(rs, r, 3, ord);
+                                kcu++;
+                            }
+                            tok = strtok_r(NULL, ",", &save);
+                        }
+                    }
+                    free(cons);
+                }
+                free(tables);
+            }
+            free(schemas);
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", kcu);
         return 1;
     }
 
