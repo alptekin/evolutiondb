@@ -397,6 +397,14 @@ void server_init_ex(int buffer_pool_pages)
             fprintf(stderr, "[BufferPool] %d pages (%d KB)\n", g_buffer_pool_pages, g_buffer_pool_pages * 4);
     }
     query_engine_init();         /* opens data file, WAL replay, reads catalog */
+    if (pgm_open_failed()) {
+        /* FAIL CLOSED: the existing data file could not be opened/decrypted
+         * (wrong/missing encryption key or corrupt header). Stop init here — do
+         * NOT start background mutators or any further subsystem on an unusable
+         * database. main() consults pgm_open_failed() right after this returns
+         * and exits before binding any listener. */
+        return;
+    }
     snowflake_init();
     mvcc_init();
     vmap_init();
