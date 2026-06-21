@@ -25,6 +25,15 @@ static int           g_global_fd   = -1;
 static FileHeader    g_header;
 static pthread_mutex_t g_pgm_lock = PTHREAD_MUTEX_INITIALIZER;
 static int           g_header_dirty = 0;
+/* Set when pgm_init() found an EXISTING data file it could not open (corrupt
+ * header, incompatible page size, or — the security-critical case — a wrong /
+ * missing encryption passphrase). The init call chain (db_ensure_root /
+ * query_engine_init / server_init_ex) is void and cannot propagate the -1, so
+ * main() must consult pgm_open_failed() and FAIL CLOSED (exit before binding
+ * any listener) instead of serving a database it could not decrypt. */
+static int           g_open_failed  = 0;
+
+int pgm_open_failed(void) { return g_open_failed; }
 
 /* ----------------------------------------------------------------
  *  Internal helpers
@@ -196,6 +205,8 @@ int pgm_init(const char *filepath)
         return 0;
     }
 
+    g_open_failed = 0;   /* fresh attempt; set on an unopenable existing file */
+
     /* Try to open existing file */
     g_global_fd = open(filepath, O_RDWR, 0644);
     if (g_global_fd >= 0) {
@@ -251,6 +262,7 @@ int pgm_init(const char *filepath)
             if (g_header.magic != EVO_MAGIC)
                 fprintf(stderr, "page_mgr: invalid magic number 0x%08X\n",
                         g_header.magic);
+            g_open_failed = 1;
             close(g_global_fd);
             g_global_fd = -1;
             pthread_mutex_unlock(&g_pgm_lock);
@@ -259,6 +271,7 @@ int pgm_init(const char *filepath)
         if (g_header.page_size != EVO_PAGE_SIZE) {
             fprintf(stderr, "page_mgr: incompatible page size %u\n",
                     g_header.page_size);
+            g_open_failed = 1;
             close(g_global_fd);
             g_global_fd = -1;
             pthread_mutex_unlock(&g_pgm_lock);
@@ -279,6 +292,7 @@ int pgm_init(const char *filepath)
                     fprintf(stderr,
                         "FATAL: Wrong encryption key for this database.\n"
                         "The EVOSQL_ENCRYPTION_KEY does not match.\n");
+                    g_open_failed = 1;
                     close(g_global_fd);
                     g_global_fd = -1;
                     pthread_mutex_unlock(&g_pgm_lock);
@@ -290,6 +304,7 @@ int pgm_init(const char *filepath)
                     "FATAL: Database is encrypted but no passphrase is available.\n"
                     "Set EVOSQL_ENCRYPTION_KEY, or EVOSQL_ENCRYPTION_KEY_CMD to a "
                     "command that prints the passphrase, to unlock it.\n");
+                g_open_failed = 1;
                 close(g_global_fd);
                 g_global_fd = -1;
                 pthread_mutex_unlock(&g_pgm_lock);

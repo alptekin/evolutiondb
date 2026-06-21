@@ -80,6 +80,14 @@ check_can delete statefulsets
 check_can create services
 check_can create secrets
 check_can create persistentvolumeclaims
+# backup/restore/rotate maintenance verbs
+check_can create jobs                   # rotation runs --rekey/--rotate-key as Jobs
+check_can delete jobs
+check_can create pods                   # restore helper pod (mounts the PVC)
+check_can delete pods
+check_can create pods/exec              # backup/restore copy via kubectl exec
+check_can update secrets                # rotation persists the new key in the Secret
+check_can get secrets
 # negative control: the namespaced Role must NOT grant cluster-wide power
 NO="$(kubectl auth can-i create nodes --as="$AS" 2>/dev/null || true)"
 [ "$NO" = "no" ] || fail "SA unexpectedly can create nodes — Role too broad"

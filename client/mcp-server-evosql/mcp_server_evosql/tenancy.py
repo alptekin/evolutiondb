@@ -251,6 +251,25 @@ def derive_db_password(tenant_id: str) -> str:
     return "p" + mac[:31]
 
 
+def derive_encryption_key(tenant_id: str) -> str:
+    """Deterministic per-tenant at-rest SEED key = HMAC(secret, "enc:"+tenant_id).
+
+    The ``"enc:"`` label keeps this distinct from the DB password
+    (``derive_db_password``), so the two are never equal even for the same
+    tenant. It SEEDS a dedicated tenant's encryption key on first provisioning;
+    rotation thereafter mints + PERSISTS a new key in the tenant's Kubernetes
+    Secret (which becomes authoritative). Returns ``k`` + 43 hex chars — an
+    opaque passphrase the engine accepts as ``EVOSQL_ENCRYPTION_KEY``."""
+    secret = _tenant_secret()
+    if not secret:
+        raise RuntimeError(
+            "EVOSQL_TENANT_SECRET must be set to derive a tenant encryption key")
+    mac = hmac.new(secret.encode("utf-8"),
+                   ("enc:" + (tenant_id or "")).encode("utf-8"),
+                   hashlib.sha256).hexdigest()
+    return "k" + mac[:43]
+
+
 def token_hash(token: str) -> str:
     """sha256 hex of a bearer token. Only the hash is ever persisted — the raw
     token never touches the registry, so a registry read cannot leak a token."""

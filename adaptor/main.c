@@ -277,6 +277,25 @@ int main(int argc, char *argv[])
     /* Initialise engine, locks, socket subsystem */
     server_init_ex(buffer_pool_pages);
 
+    /* FAIL CLOSED: if an existing data file could not be opened/decrypted
+     * (corrupt header or, security-critically, a wrong/missing encryption
+     * passphrase), do NOT proceed to offline maintenance or bind any listener.
+     * The init chain is void and swallows pgm_init()'s -1, so this is the gate
+     * that turns "could not unlock" into a non-zero exit. It makes a wrong-key
+     * start observable as "process exited / port never opened" — which the K8s
+     * readiness probe and the local TenantSupervisor's pending-key recovery both
+     * rely on to mean "wrong key". */
+    if (pgm_open_failed()) {
+        fprintf(stderr, "FATAL: could not open the database (see the message "
+                "above). Refusing to start.\n");
+        fflush(stderr);
+        /* server_init_ex() bailed early, so do NOT run server_cleanup() over a
+         * half-initialized engine; the data file is already closed and the OS
+         * reclaims the rest. Exit non-zero so a supervisor (K8s readiness / the
+         * local TenantSupervisor) sees the start fail. */
+        return 1;
+    }
+
     /* --base-backup mode: run the copy and exit
      * without binding listener sockets. Scripted replica bootstrap
      * uses this to clone a fresh data directory from primary. */

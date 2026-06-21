@@ -52,6 +52,15 @@ void db_ensure_root(void)
         char dbFile[1024];
         snprintf(dbFile, sizeof(dbFile), "%s/evosql.db", root);
         pgm_init(dbFile);  /* WAL replay happens inside pgm_init if needed */
+        if (pgm_open_failed()) {
+            /* The existing data file could not be opened/decrypted (corrupt
+             * header or a wrong/missing encryption passphrase). Do NOT proceed
+             * to cat_init/users/grants/hnsw — those read pages and would crash
+             * on the unusable file. Bail now; server_init_ex() and main() both
+             * consult pgm_open_failed() and FAIL CLOSED (exit before binding any
+             * listener) rather than serve a database that could not be opened. */
+            return;
+        }
         cat_init();  /* Creates default db/schema/admin on first run */
     }
 
