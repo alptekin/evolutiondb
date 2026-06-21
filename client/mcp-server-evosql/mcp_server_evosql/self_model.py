@@ -31,18 +31,15 @@ def _disp(name):
 
 
 def _llm(prompt: str) -> str:
-    """One anthropic call. Model from EVOSQL_PROFILE_LLM_MODEL. Returns text."""
-    from . import pii_egress, provider_policy
-    # Residency / no-train gate before this direct SDK call (fail-closed when on).
-    provider_policy.check("anthropic", endpoint=provider_policy.anthropic_endpoint())
-    prompt = pii_egress.scrub(prompt)   # mask PII before this direct SDK call
-    import anthropic
-    c = anthropic.Anthropic()
-    msg = c.messages.create(
+    """One anthropic call. Model from EVOSQL_PROFILE_LLM_MODEL. Returns text.
+    Routes through llm.chat — the single egress chokepoint (residency/PII/spend
+    guards live there, not duplicated here)."""
+    from . import llm
+    out = llm.chat(
+        prompt, provider="anthropic",
         model=os.environ.get("EVOSQL_PROFILE_LLM_MODEL", "claude-sonnet-4-6"),
-        max_tokens=1500,
-        messages=[{"role": "user", "content": prompt}])
-    return msg.content[0].text
+        max_tokens=1500)
+    return out or ""
 
 
 # ---------------------------------------------------------------- signals
