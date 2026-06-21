@@ -11,10 +11,10 @@ Connection-library agnostic: a ``Conn`` is anything with ``query(sql)->rows`` an
 MemoryBackend in the server) and supplies the store/table names to move (the
 platform discovers stores via ``dsar.stores`` and tables from its own schema).
 
-Scope v1: memory-store rows (the platform's primary data — full fidelity) and
-table rows with their columns (basic SQL types). Table PK/indexes/constraints
-are NOT recreated yet (a follow-up); callers that need them recreate the schema
-before copying rows.
+Scope: memory-store rows (full fidelity) and tables with their columns, PRIMARY
+KEY, and secondary indexes (read from information_schema.key_column_usage and
+pg_indexes). Expression/HNSW indexes and CHECK/FK constraints are still not
+carried (callers needing those recreate the schema first).
 """
 from __future__ import annotations
 
@@ -75,13 +75,48 @@ def _table_columns(src, table: str) -> List[Tuple[str, str]]:
     return cols
 
 
+def _table_pk(src, table: str) -> List[str]:
+    """Primary-key column names in key order, via information_schema.key_column_
+    usage. These synthetic views ignore the projection (return ALL columns) and
+    don't filter by WHERE, so select all and filter/position here — exactly like
+    _table_columns. KCU columns: [constraint_name, table_name, column_name,
+    ordinal_position]."""
+    rows = src.query("SELECT * FROM information_schema.key_column_usage") or []
+    pk: List[Tuple[int, str]] = []
+    for r in rows:
+        if (len(r) >= 4 and str(r[1]) == table
+                and str(r[0]).endswith("_pkey")):
+            try:
+                pos = int(r[3])
+            except (TypeError, ValueError):
+                pos = 0
+            pk.append((pos, str(r[2])))
+    pk.sort()
+    return [name for _, name in pk]
+
+
+def _table_indexes(src, table: str) -> List[str]:
+    """The CREATE INDEX statements for a table's secondary indexes (the PK is
+    not listed here), via pg_indexes. Columns: [schemaname, tablename,
+    indexname, tablespace, indexdef]."""
+    rows = src.query("SELECT * FROM pg_indexes") or []
+    return [str(r[4]) for r in rows
+            if len(r) >= 5 and str(r[1]) == table and r[4]]
+
+
 def copy_table(src, dst, table: str) -> int:
-    """Recreate a table's columns on dst and copy its rows. Basic types only;
-    PK/indexes/constraints are not carried (v1). Returns rows copied."""
+    """Recreate a table on dst (columns + PRIMARY KEY + secondary indexes) and
+    copy its rows. Returns rows copied. The PK goes inline in CREATE TABLE;
+    indexes are replayed after the data (best-effort — an expression/HNSW index
+    that pg_indexes can't render, or a replay error, is skipped). Basic column
+    types; CHECK/FK constraints are still not carried."""
     cols = _table_columns(src, table)
     if not cols:
         return 0
     coldef = ", ".join(f"{name} {typ}" for name, typ in cols)
+    pk = _table_pk(src, table)
+    if pk:
+        coldef += ", PRIMARY KEY (" + ", ".join(pk) + ")"
     dst.execute(f"DROP TABLE IF EXISTS {table}")
     dst.execute(f"CREATE TABLE {table} ({coldef})")
     colnames = ", ".join(name for name, _ in cols)
@@ -91,6 +126,11 @@ def copy_table(src, dst, table: str) -> int:
         vals = ", ".join("NULL" if v is None else f"'{_q(str(v))}'" for v in r)
         dst.execute(f"INSERT INTO {table} ({colnames}) VALUES ({vals})")
         n += 1
+    for indexdef in _table_indexes(src, table):
+        try:
+            dst.execute(indexdef)
+        except Exception:
+            pass                       # best-effort: skip an unreplayable index
     return n
 
 
