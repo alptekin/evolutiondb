@@ -60,6 +60,15 @@ spec:
                 secretKeyRef:
                   name: {{ $cpName }}
                   key: tenant-secret
+            # -- dedicated-tenant (K8s) maintenance: lets the operator rotate a
+            #    dedicated tenant's at-rest key from the UI, using the mounted
+            #    control-plane ServiceAccount's RBAC. Needs controlPlane.enabled
+            #    (the SA + tenant-management Role); without it the kubectl calls
+            #    are denied and the action degrades to a clean error. --
+            - name: EVOSQL_TENANT_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: EVOSQL_TENANT_IMAGE
+              value: "{{ .Values.controlPlane.tenant.image.repository }}:{{ .Values.controlPlane.tenant.image.tag }}"
             {{- if .Values.controlPlane.ui.controlToken }}
             - name: EVOSQL_CONTROL_TOKEN
               valueFrom:
