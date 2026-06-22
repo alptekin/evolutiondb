@@ -220,14 +220,31 @@ async function restoreBackup(id,bid){
 }
 async function accounts(id){
   try{
-    const {accounts}=await api('GET',`/api/tenants/${encodeURIComponent(id)}/accounts`);
+    const {accounts,connectors_allowed}=await api('GET',`/api/tenants/${encodeURIComponent(id)}/accounts`);
+    const policy = connectors_allowed===null||connectors_allowed===undefined
+      ? '<span class="muted">all connectors allowed</span>'
+      : (connectors_allowed.length?connectors_allowed.map(esc).join(', '):'<span class="warn">none allowed</span>');
     const rows = accounts.length ? accounts.map(a=>
       `<tr><td><strong>${esc(a.connector)}</strong></td>
         <td class="muted">${a.updated?esc(new Date(a.updated*1000).toISOString().slice(0,19).replace('T',' ')):''}</td>
+        <td>${a.allowed?'<span class="pill active">allowed</span>':'<span class="pill suspended">blocked</span>'}</td>
         <td><button class="danger" onclick="revokeAccount('${jsq(id)}','${jsq(a.connector)}')">Revoke</button></td></tr>`).join('')
-      : `<tr><td colspan="3" class="muted">No connected accounts.</td></tr>`;
+      : `<tr><td colspan="4" class="muted">No connected accounts.</td></tr>`;
     modal(`Connected accounts · ${esc(id)}`,
-      `<table style="width:100%"><thead><tr><th>Connector</th><th>Updated</th><th></th></tr></thead><tbody>${rows}</tbody></table>`);
+      `<p>Allow-list: ${policy} &nbsp; <button onclick="setConnectors('${jsq(id)}')">Edit allowed</button></p>
+       <table style="width:100%"><thead><tr><th>Connector</th><th>Updated</th><th>Policy</th><th></th></tr></thead><tbody>${rows}</tbody></table>`);
+  }catch(e){toast(e.message,true);}
+}
+async function setConnectors(id){
+  const cur=prompt(`Allowed connectors for "${id}" — comma-separated names, or "all" to allow every connector.\nKnown: teams, gmail, slack, github, calendar, browser, imessage, notes, notion, youtube, outlook, claude-session, azure-devops`,'all');
+  if(cur===null)return;
+  const trimmed=cur.trim().toLowerCase();
+  const connectors = (trimmed===''||trimmed==='all') ? null
+    : cur.split(',').map(s=>s.trim().toLowerCase()).filter(Boolean);
+  try{ const r=await api('POST',`/api/tenants/${encodeURIComponent(id)}/connectors`,{connectors});
+    const rev=(r.revoked||[]).length?` (revoked ${r.revoked.length})`:'';
+    toast(`allow-list set: ${r.connectors_allowed?r.connectors_allowed.join(', '):'all'}${rev}`);
+    accounts(id);
   }catch(e){toast(e.message,true);}
 }
 async function revokeAccount(id,connector){

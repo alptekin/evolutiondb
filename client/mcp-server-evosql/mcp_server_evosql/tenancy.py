@@ -52,6 +52,24 @@ _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 
 VALID_ROLES = ("admin", "member", "viewer")
 
+# The canonical connector names an operator may put on a tenant's allow-list
+# (tenant meta ``connectors_allowed``). Mirrors the orchestrator's connector set;
+# kept here as a plain constant so the control plane validates names without a
+# cross-package import. Update both when a connector is added.
+CANONICAL_CONNECTORS = (
+    "teams", "gmail", "slack", "github", "calendar", "browser", "imessage",
+    "notes", "notion", "youtube", "outlook", "claude-session", "azure-devops",
+)
+
+
+def connector_allowed(connectors_allowed, connector: str) -> bool:
+    """True if a tenant whose meta has ``connectors_allowed`` may use
+    ``connector``. ``None``/absent allow-list = every connector allowed
+    (backward compatible); otherwise the connector must be on the list."""
+    if connectors_allowed is None:
+        return True
+    return connector in connectors_allowed
+
 
 def is_valid_identifier(name: str) -> bool:
     """True if ``name`` is safe to interpolate as a bare SQL identifier."""

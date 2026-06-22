@@ -35,6 +35,11 @@ _STATIC = Path(__file__).resolve().parent.parent / "web" / "control.html"
 _RATE_LOCK = threading.Lock()
 _RATE: dict = {}
 
+# The reserved token-store key holding a tenant's connector allow-list. MUST
+# match evolutiondb_pii.token_store.POLICY_KEY (the connectors read it there);
+# kept as a local constant so the control plane needs no import of that package.
+_CONNECTOR_POLICY_KEY = "__connector_policy__"
+
 
 # ====================================================================== logic
 class ControlPlane:
@@ -297,10 +302,14 @@ class ControlPlane:
     def list_accounts(self, tenant_id: str, user: str = "") -> dict:
         """The connector accounts a tenant/user has connected — the per-tenant
         token-store rows (token:<connector>). Values stay encrypted; we only
-        surface the connector name + last-updated, never the token."""
-        if not self.registry().get_tenant(tenant_id):
+        surface the connector name + last-updated, never the token. Each account
+        is annotated with ``allowed`` per the tenant's connector allow-list, and
+        the response carries the allow-list (``connectors_allowed``; None = all)."""
+        meta = self.registry().get_tenant(tenant_id)
+        if not meta:
             raise KeyError(tenant_id)
         from .server import _e
+        allowed = meta.get("connectors_allowed")
         ns = (user or "").strip() or tenant_id
         backend = self.tenant_backend(tenant_id, ns)
         rows = []
@@ -319,9 +328,118 @@ class ControlPlane:
                 updated = json.loads(val).get("updated")
             except Exception:
                 pass
-            out.append({"connector": connector, "updated": updated})
+            out.append({"connector": connector, "updated": updated,
+                        "allowed": tenancy.connector_allowed(allowed, connector)})
         out.sort(key=lambda a: a["connector"])
-        return {"tenant_id": tenant_id, "user": ns, "accounts": out}
+        return {"tenant_id": tenant_id, "user": ns,
+                "connectors_allowed": allowed, "accounts": out}
+
+    def set_connectors(self, operator, tenant_id: str, connectors) -> dict:
+        """Set a tenant's connector ALLOW-list (operator policy). ``connectors``
+        is a list of canonical connector names, or None/[] to clear it (= every
+        connector allowed, the default). Validates names, persists the list in
+        the tenant's registry meta, then REVOKES any currently-stored connector
+        token whose connector is no longer allowed (so the policy takes effect
+        immediately). Returns the new allow-list + the revoked accounts.
+
+        Note: this is the operator-facing allow-list + immediate revoke. Blocking
+        a connector daemon from RE-establishing a disallowed token at the connector
+        layer is a follow-up (it needs the per-tenant token-namespace model)."""
+        reg = self.registry()
+        meta = reg.get_tenant(tenant_id)
+        if not meta:
+            raise KeyError(tenant_id)
+        if connectors is None:
+            allowed = None
+        else:
+            if not isinstance(connectors, (list, tuple)):
+                raise ValueError("connectors must be a list or null")
+            # normalize (lowercase + trim + dedupe) so case/whitespace never
+            # spuriously fails the canonical-name check.
+            allowed = sorted({str(c).strip().lower()
+                              for c in connectors if str(c).strip()})
+            unknown = [c for c in allowed
+                       if c not in tenancy.CANONICAL_CONNECTORS]
+            if unknown:
+                raise ValueError(f"unknown connectors: {unknown}")
+            if not allowed:          # [] means "clear" -> all allowed
+                allowed = None
+        meta["connectors_allowed"] = allowed
+        reg.put_tenant(meta)
+        # Mirror the allow-list into the tenant DB so the connector daemons'
+        # TokenStore enforces it at the set/use chokepoint (it reads the reserved
+        # __connector_policy__/allowed row with its own connection — no admin
+        # access needed). Then revoke any already-stored disallowed token.
+        self._write_connector_policy(tenant_id, allowed)
+        revoked = [] if allowed is None else self._revoke_disallowed(
+            tenant_id, set(allowed))
+        self._audit(operator, "set_connectors", "ok",
+                    ref=f"{tenant_id}:{','.join(allowed) if allowed else 'all'}")
+        return {"tenant_id": tenant_id, "connectors_allowed": allowed,
+                "revoked": revoked}
+
+    def _write_connector_policy(self, tenant_id: str, allowed) -> None:
+        """Write/clear the connector policy row TokenStore reads. It must live in
+        the SAME namespace as that tenant's tokens (the mcp_tokens store is shared
+        across tenant DBs + separated by namespace), under the reserved key
+        ``_CONNECTOR_POLICY_KEY``, value ``{"connectors":[...]}``. Write it to the
+        canonical tenant namespace AND every namespace that currently holds a
+        token, so it sits beside the tokens it governs. ``allowed=None`` clears
+        it (= all allowed)."""
+        from .server import _e
+        backend = self.tenant_backend(tenant_id, tenant_id)
+        try:
+            backend._exec("CREATE MEMORY STORE IF NOT EXISTS mcp_tokens")
+        except Exception:
+            pass
+        namespaces = {tenant_id}
+        try:
+            for ns, _k in (backend._query(
+                    "SELECT mem_namespace, mem_key FROM __mem_mcp_tokens "
+                    "WHERE mem_key LIKE 'token:%'") or []):
+                namespaces.add(str(ns))
+        except Exception:
+            pass
+        val = (None if allowed is None
+               else json.dumps({"connectors": list(allowed)}, ensure_ascii=False))
+        for ns in namespaces:
+            try:
+                backend._exec(f"MEMORY DELETE FROM mcp_tokens WHERE "
+                              f"NS = '{_e(ns)}' AND KEY = '{_e(_CONNECTOR_POLICY_KEY)}'")
+            except Exception:
+                pass
+            if val is not None:
+                try:
+                    backend._exec(f"MEMORY PUT INTO mcp_tokens VALUES "
+                                  f"('{_e(ns)}','{_e(_CONNECTOR_POLICY_KEY)}',"
+                                  f"'{_e(val)}')")
+                except Exception:
+                    pass
+
+    def _revoke_disallowed(self, tenant_id: str, allow: set) -> list:
+        """Delete every stored connector token (across the tenant's namespaces)
+        whose connector is not in ``allow``. Returns the revoked accounts."""
+        from .server import _e
+        backend = self.tenant_backend(tenant_id, tenant_id)
+        try:
+            rows = backend._query(
+                "SELECT mem_namespace, mem_key FROM __mem_mcp_tokens "
+                "WHERE mem_key LIKE 'token:%'") or []
+        except Exception:
+            return []
+        revoked = []
+        for ns, key in rows:
+            connector = str(key).split("token:", 1)[-1]
+            if connector in allow:
+                continue
+            try:
+                backend._exec(f"MEMORY DELETE FROM mcp_tokens "
+                              f"WHERE NS = '{_e(str(ns))}' "
+                              f"AND KEY = '{_e(str(key))}'")
+                revoked.append({"user": str(ns), "connector": connector})
+            except Exception:
+                pass
+        return revoked
 
     def revoke_account(self, operator, tenant_id: str, connector: str,
                        user: str = "") -> dict:
@@ -519,6 +637,9 @@ class Handler(BaseHTTPRequestHandler):
             if action == "rotate-key":
                 return self._safe(lambda: self.cp.rotate_key(
                     op, tid, body.get("rotate_dek", True)))
+            if action == "connectors":
+                return self._safe(lambda: self.cp.set_connectors(
+                    op, tid, body.get("connectors")))
             if action == "backup":
                 return self._safe(lambda: self.cp.backup(op, tid))
             if action == "restore":

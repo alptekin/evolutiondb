@@ -220,12 +220,48 @@ def test_cli_set_get_list_delete(monkeypatch):
     assert json.loads(out) == {}
 
 
+def test_connector_allow_list_enforced():
+    from evolutiondb_pii.token_store import POLICY_KEY, ConnectorNotAllowed
+    from evolutiondb_pii import store_io
+    conn = FakeConn()
+    # the policy lives in the SAME namespace as the tenant's tokens (here "t1")
+    # no policy row -> every connector allowed (backward compatible)
+    TokenStore("gmail", env=_env("t1"), conn=conn).save({"token": "G"})
+    assert TokenStore("gmail", env=_env("t1"), conn=conn).load() == {"token": "G"}
+
+    # allow-list = [slack] -> gmail is now disallowed
+    store_io.write_row(conn, "mcp_tokens", "t1", POLICY_KEY,
+                       {"connectors": ["slack"]})
+    # load: the stored gmail token reads as inert {} (continuous use-time gate)
+    assert TokenStore("gmail", env=_env("t1"), conn=conn).load() == {}
+    # save: a disallowed connector is refused
+    raised = False
+    try:
+        TokenStore("gmail", env=_env("t1"), conn=conn).save({"token": "G2"})
+    except ConnectorNotAllowed:
+        raised = True
+    assert raised, "saving a disallowed connector token must raise"
+    # an allowed connector still works
+    TokenStore("slack", env=_env("t1"), conn=conn).save({"token": "S"})
+    assert TokenStore("slack", env=_env("t1"), conn=conn).load() == {"token": "S"}
+
+    # a DIFFERENT namespace is unaffected (policy is per-namespace = per-tenant)
+    TokenStore("gmail", env=_env("t2"), conn=conn).save({"token": "G-t2"})
+    assert TokenStore("gmail", env=_env("t2"), conn=conn).load() == {"token": "G-t2"}
+
+    # clearing the list (null) -> all allowed again; the gmail token is back
+    store_io.write_row(conn, "mcp_tokens", "t1", POLICY_KEY,
+                       {"connectors": None})
+    assert TokenStore("gmail", env=_env("t1"), conn=conn).load() == {"token": "G"}
+
+
 if __name__ == "__main__":
     print("=== per-tenant connector token store ===")
     for fn in (test_seal_open_roundtrip, test_wrong_key_cannot_open,
                test_save_load_roundtrip_and_value_is_encrypted,
                test_namespace_isolation, test_delete, test_rotate_token_key,
-               test_maybe_none_without_secret):
+               test_maybe_none_without_secret,
+               test_connector_allow_list_enforced):
         run(fn.__name__, fn)
     print(f"\nResults: {passed} passed, {failed} failed out of {passed + failed}")
     sys.exit(1 if failed > 0 else 0)
