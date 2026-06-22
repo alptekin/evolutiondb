@@ -126,6 +126,7 @@ async function load(){
                :`<button onclick="act('${id}','suspend')">Suspend</button>`}
           <button onclick="issueToken('${id}')">Token</button>
           <button onclick="setTier('${id}','${t.tier==='dedicated'?'shared':'dedicated'}')">→ ${t.tier==='dedicated'?'shared':'dedicated'}</button>
+          ${t.tier==='dedicated'?`<button onclick="rotateKey('${id}')">Rotate key</button>`:''}
           <button onclick="accounts('${id}')">Accounts</button>
           <button onclick="dsar('${id}')">DSAR</button>
           <button class="danger" onclick="del('${id}')">Delete</button>
@@ -169,6 +170,19 @@ async function dsar(id){
       toast(`erased ${r.result.row_count} rows (receipt: ${r.result.receipt})`);
     }catch(e){toast(e.message,true);}
   }
+}
+async function rotateKey(id){
+  if(!confirm(`Rotate the at-rest encryption key for "${id}"? The tenant is briefly offline while its engine restarts under the new key.`))return;
+  const dek=confirm(`Also rotate the DATA key and re-encrypt every page?\n\nOK = yes (slower) · Cancel = passphrase only`);
+  try{
+    const r=await api('POST',`/api/tenants/${encodeURIComponent(id)}/rotate-key`,{rotate_dek:dek});
+    modal(`Key rotation · ${esc(id)}`,
+      `<p><strong>${r.ok?'Rotated':'Did not fully rotate'}</strong></p>
+       <p>Passphrase: ${r.passphrase_rotated?'✓ rotated':'✗'} &nbsp;·&nbsp; Data key: ${r.dek_rotated?'✓ rotated':'✗'}</p>
+       ${r.needs_reconcile?'<p class="warn">⚠ Needs reconcile — re-run rotation or check the tenant.</p>':''}
+       ${r.detail?`<p class="muted">${esc(r.detail)}</p>`:''}`);
+    load();
+  }catch(e){toast(e.message,true);}
 }
 async function accounts(id){
   try{
