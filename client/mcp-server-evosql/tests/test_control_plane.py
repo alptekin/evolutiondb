@@ -245,6 +245,71 @@ def test_oauth_consents_list_and_revoke():
         s.close(); os.environ.pop("EVOSQL_CONTROL_TOKEN", None)
 
 
+def test_rotate_key_dedicated_only():
+    os.environ["EVOSQL_CONTROL_TOKEN"] = TOKEN
+    s = _Srv()
+    try:
+        s.req("POST", "/api/tenants", {"tenant_id": "crypto", "admin_user": "admin"})
+
+        # a fake dedicated backend so no real cluster is needed
+        class FakeK8s:
+            def __init__(self):
+                self.calls = []
+
+            def rotate_key(self, tid, *, rotate_dek=True):
+                self.calls.append((tid, rotate_dek))
+                return {"ok": True, "passphrase_rotated": True,
+                        "dek_rotated": rotate_dek, "needs_reconcile": False,
+                        "detail": ""}
+        fake = FakeK8s()
+        s.cp._dedicated_backend = lambda: fake
+
+        # a shared-tier tenant cannot rotate (one engine key for the whole pool)
+        code, body = s.req("POST", "/api/tenants/crypto/rotate-key",
+                           {"rotate_dek": True})
+        assert code == 400 and "dedicated" in body.get("error", ""), (code, body)
+
+        # promote to dedicated, then rotation succeeds end to end
+        s.req("POST", "/api/tenants/crypto/tier", {"tier": "dedicated"})
+        code, body = s.req("POST", "/api/tenants/crypto/rotate-key",
+                           {"rotate_dek": True})
+        assert code == 200 and body["ok"] and body["passphrase_rotated"] \
+            and body["dek_rotated"], (code, body)
+        assert fake.calls == [("crypto", True)]
+
+        # rotate_dek=False is threaded through to the backend
+        code, body = s.req("POST", "/api/tenants/crypto/rotate-key",
+                           {"rotate_dek": False})
+        assert code == 200 and body["dek_rotated"] is False
+        assert fake.calls[-1] == ("crypto", False)
+
+        # unknown tenant -> 404
+        code, _ = s.req("POST", "/api/tenants/nope/rotate-key", {})
+        assert code == 404
+
+        # operator gate: no token -> 401 (never a tenant credential)
+        code, _ = s.req("POST", "/api/tenants/crypto/rotate-key", {}, token=None)
+        assert code == 401
+    finally:
+        s.close(); os.environ.pop("EVOSQL_CONTROL_TOKEN", None)
+
+
+def test_rotate_key_unconfigured_backend_errors():
+    # with no EVOSQL_TENANT_IMAGE, the real _dedicated_backend refuses cleanly
+    os.environ["EVOSQL_CONTROL_TOKEN"] = TOKEN
+    _saved_img = os.environ.pop("EVOSQL_TENANT_IMAGE", None)
+    s = _Srv()
+    try:
+        s.req("POST", "/api/tenants", {"tenant_id": "dedi", "admin_user": "admin"})
+        s.req("POST", "/api/tenants/dedi/tier", {"tier": "dedicated"})
+        code, body = s.req("POST", "/api/tenants/dedi/rotate-key", {})
+        assert code == 400 and "not configured" in body.get("error", ""), (code, body)
+    finally:
+        s.close(); os.environ.pop("EVOSQL_CONTROL_TOKEN", None)
+        if _saved_img is not None:
+            os.environ["EVOSQL_TENANT_IMAGE"] = _saved_img
+
+
 if __name__ == "__main__":
     print("=== Phase 2 governance: operator control-plane UI ===")
     run("operator_auth_static_token", test_operator_auth_static_token)
@@ -255,5 +320,7 @@ if __name__ == "__main__":
     run("dsar_export_and_erase", test_dsar_export_and_erase)
     run("connected_accounts_list_and_revoke", test_connected_accounts_list_and_revoke)
     run("oauth_consents_list_and_revoke", test_oauth_consents_list_and_revoke)
+    run("rotate_key_dedicated_only", test_rotate_key_dedicated_only)
+    run("rotate_key_unconfigured_backend_errors", test_rotate_key_unconfigured_backend_errors)
     print(f"\nResults: {passed} passed, {failed} failed out of {passed + failed}")
     sys.exit(1 if failed > 0 else 0)

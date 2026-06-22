@@ -130,6 +130,46 @@ class ControlPlane:
         self._audit(operator, "delete", "ok", ref=tenant_id)
         return {"tenant_id": tenant_id, "deleted": True}
 
+    def _dedicated_backend(self):
+        """Construct the Kubernetes spawn backend for dedicated-tenant at-rest
+        maintenance (key rotation), from env. Encryption is ON so a key exists to
+        rotate. Overridable in tests. Raises if it is not configured.
+
+        K8s maintenance is kubectl-based (stateless w.r.t. the backend object),
+        so the control plane can drive it on the cluster's named objects without
+        sharing the serving process's router/supervisor instance."""
+        from .tenant_k8s import KubernetesTenantBackend
+        image = os.environ.get("EVOSQL_TENANT_IMAGE", "").strip()
+        if not image:
+            raise RuntimeError(
+                "dedicated-tenant maintenance is not configured on this control "
+                "plane (set EVOSQL_TENANT_IMAGE and the EVOSQL_TENANT_* env)")
+        return KubernetesTenantBackend(
+            namespace=os.environ.get("EVOSQL_TENANT_NAMESPACE", "default"),
+            image=image,
+            kubectl=os.environ.get("EVOSQL_TENANT_KUBECTL", "kubectl"),
+            encrypt=True)
+
+    def rotate_key(self, operator, tenant_id: str,
+                   rotate_dek: bool = True) -> dict:
+        """Rotate a DEDICATED tenant's at-rest encryption key (the KMS button).
+        Shared-pool tenants share one engine + one key, so per-tenant rotation
+        applies only to dedicated tenants. Offline for that ONE tenant only;
+        every other tenant keeps serving. Returns the backend's rotate_key result
+        ({ok, passphrase_rotated, dek_rotated, needs_reconcile, detail})."""
+        meta = self.registry().get_tenant(tenant_id)
+        if not meta:
+            raise KeyError(tenant_id)
+        if meta.get("tier") != "dedicated":
+            raise ValueError("key rotation applies only to dedicated tenants "
+                             "(the shared pool uses one engine key for all)")
+        result = self._dedicated_backend().rotate_key(
+            tenant_id, rotate_dek=bool(rotate_dek))
+        self._audit(operator, "rotate_key",
+                    "ok" if result.get("ok") else "partial",
+                    ref=f"{tenant_id}:dek={bool(rotate_dek)}")
+        return result
+
     def issue_token(self, operator, tenant_id: str, user_id: str,
                     roles=("admin",), ttl_days: int = 90) -> dict:
         if not self.registry().get_tenant(tenant_id):
@@ -377,6 +417,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._safe(lambda: self.cp.resume(op, tid))
             if action == "tier":
                 return self._safe(lambda: self.cp.set_tier(op, tid, body.get("tier", "")))
+            if action == "rotate-key":
+                return self._safe(lambda: self.cp.rotate_key(
+                    op, tid, body.get("rotate_dek", True)))
             if action == "token":
                 roles = body.get("roles") or ["admin"]
                 return self._safe(lambda: self.cp.issue_token(
