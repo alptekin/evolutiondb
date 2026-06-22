@@ -60,6 +60,26 @@
         color:var(--ok);border:1px solid #1c4a2e;padding:10px 16px;border-radius:11px;font-size:13px;
         opacity:0;transition:opacity .25s;pointer-events:none;z-index:9}
   #toast.show{opacity:1}
+  /* rendered-markdown styling for the agent's answer bubble */
+  .bubble.md{white-space:normal}
+  .bubble.md>*:first-child{margin-top:0}
+  .bubble.md>*:last-child{margin-bottom:0}
+  .bubble.md p{margin:0 0 8px}
+  .bubble.md h2,.bubble.md h3,.bubble.md h4{margin:13px 0 6px;font-size:14.5px;color:var(--accent2);font-weight:600}
+  .bubble.md ul,.bubble.md ol{margin:6px 0;padding-left:22px}
+  .bubble.md li{margin:2px 0}
+  .bubble.md code{background:var(--tool);border:1px solid var(--line);border-radius:5px;
+        padding:1px 5px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
+  .bubble.md pre{background:var(--tool);border:1px solid var(--line);border-radius:9px;
+        padding:10px 12px;overflow-x:auto;margin:8px 0}
+  .bubble.md pre code{background:none;border:0;padding:0}
+  .bubble.md table{border-collapse:collapse;margin:9px 0;width:100%;font-size:13px}
+  .bubble.md th,.bubble.md td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}
+  .bubble.md th{background:var(--tool);color:var(--accent2);font-weight:600}
+  .bubble.md a{color:var(--accent);text-decoration:underline}
+  .bubble.md blockquote{border-left:3px solid var(--line);margin:8px 0;padding:2px 12px;color:var(--dim)}
+  .bubble.md hr{border:0;border-top:1px solid var(--line);margin:10px 0}
+  .bubble.md strong{color:var(--txt);font-weight:700}
 </style>
 </head>
 <body>
@@ -108,7 +128,46 @@ const pending = document.getElementById('pending');
 
 function el(cls, html){const d=document.createElement('div'); d.className=cls; if(html!=null)d.innerHTML=html; return d;}
 function scroll(){log.scrollTop = log.scrollHeight;}
-function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function esc(s){return (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+// Minimal, dependency-free markdown -> HTML for the agent's answer. ESCAPE FIRST
+// (so any HTML/script in the model output is inert), THEN apply a controlled
+// subset: fenced code, GFM tables, headings, lists, blockquote, hr, and inline
+// bold/italic/code/links. Not a full CommonMark parser — just what the agent emits.
+function mdInline(s){
+  return s
+    .replace(/`([^`]+)`/g, (_,c)=>'<code>'+c+'</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^\w])\*([^*\n]+)\*(?=[^\w]|$)/g, '$1<em>$2</em>')
+    .replace(/(^|[^\w])_([^_\n]+)_(?=[^\w]|$)/g, '$1<em>$2</em>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+             '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+}
+function md(text){
+  const lines = esc(text==null?'':String(text)).split('\n');
+  let html='', i=0; const para=[];
+  const flush=()=>{ if(para.length){ html+='<p>'+mdInline(para.join('<br>'))+'</p>'; para.length=0; } };
+  const cells=r=>r.replace(/^\s*\|/,'').replace(/\|\s*$/,'').split('|').map(c=>c.trim());
+  while(i<lines.length){
+    const line=lines[i];
+    if(/^\s*```/.test(line)){ flush(); i++; const c=[]; while(i<lines.length && !/^\s*```/.test(lines[i])){ c.push(lines[i]); i++; } i++; html+='<pre><code>'+c.join('\n')+'</code></pre>'; continue; }
+    if(line.indexOf('|')>=0 && i+1<lines.length){ const sep=lines[i+1].trim();
+      if(/^[\s|:-]+$/.test(sep) && sep.indexOf('-')>=0 && sep.indexOf('|')>=0){
+        flush(); const hd=cells(line); i+=2;
+        let t='<table><thead><tr>'+hd.map(h=>'<th>'+mdInline(h)+'</th>').join('')+'</tr></thead><tbody>';
+        while(i<lines.length && lines[i].indexOf('|')>=0 && lines[i].trim()){ t+='<tr>'+cells(lines[i]).map(c=>'<td>'+mdInline(c)+'</td>').join('')+'</tr>'; i++; }
+        html+=t+'</tbody></table>'; continue; } }
+    const h=line.match(/^(#{1,6})\s+(.*)$/);
+    if(h){ flush(); const lv=Math.min(h[1].length+1,6); html+='<h'+lv+'>'+mdInline(h[2])+'</h'+lv+'>'; i++; continue; }
+    if(/^\s*(---|\*\*\*|___)\s*$/.test(line)){ flush(); html+='<hr>'; i++; continue; }
+    if(/^\s*&gt;\s?/.test(line)){ flush(); const bq=[]; while(i<lines.length && /^\s*&gt;\s?/.test(lines[i])){ bq.push(lines[i].replace(/^\s*&gt;\s?/,'')); i++; } html+='<blockquote>'+mdInline(bq.join('<br>'))+'</blockquote>'; continue; }
+    if(/^\s*[-*+]\s+/.test(line)){ flush(); const it=[]; while(i<lines.length && /^\s*[-*+]\s+/.test(lines[i])){ it.push(lines[i].replace(/^\s*[-*+]\s+/,'')); i++; } html+='<ul>'+it.map(x=>'<li>'+mdInline(x)+'</li>').join('')+'</ul>'; continue; }
+    if(/^\s*\d+\.\s+/.test(line)){ flush(); const it=[]; while(i<lines.length && /^\s*\d+\.\s+/.test(lines[i])){ it.push(lines[i].replace(/^\s*\d+\.\s+/,'')); i++; } html+='<ol>'+it.map(x=>'<li>'+mdInline(x)+'</li>').join('')+'</ol>'; continue; }
+    if(!line.trim()){ flush(); i++; continue; }
+    para.push(line); i++;
+  }
+  flush(); return html;
+}
 
 function addUser(text){
   const m=el('msg user'); m.appendChild(el('role',null)).textContent='you';
@@ -133,7 +192,7 @@ form.addEventListener('submit', e=>{
     if(m.kind==='text'){ const s=el('step thinking'); s.textContent='💭 '+m.text; tl.appendChild(s); scroll(); }
     else if(m.kind==='tool_call'){ const s=el('step','→ <b>'+esc(m.tool)+'</b> <span style="opacity:.7">'+esc(JSON.stringify(m.input))+'</span>'); tl.appendChild(s); scroll(); }
     else if(m.kind==='tool_result'){ const ok=(m.result&&m.result.ok); const s=el('step','&nbsp;&nbsp;<span class="ok">✓</span> '+(ok?'ok':'done')+(m.result&&(m.result.key||m.result.id)?(' · '+esc(m.result.key||m.result.id)):'')); tl.appendChild(s); scroll(); }
-    else if(m.kind==='final'){ b.className='bubble'; b.textContent=m.text||'(no answer)'; scroll(); refreshPending(); }
+    else if(m.kind==='final'){ b.className='bubble md'; b.innerHTML=md(m.text)||'(no answer)'; scroll(); refreshPending(); }
     else if(m.kind==='error'){ b.className='bubble'; b.style.color='var(--warn)'; b.textContent='⚠ '+m.message; }
     else if(m.kind==='done'){ es.close(); sendBtn.disabled=false; q.focus(); refreshPending(); }
   };
