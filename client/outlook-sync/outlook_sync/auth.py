@@ -53,11 +53,22 @@ SCOPES = [
 SEND_SCOPE = "https://graph.microsoft.com/Mail.Send"
 
 
+def _truthy(v):
+    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _scopes():
-    if os.environ.get("EVOSQL_OUTLOOK_SEND", "").strip().lower() in (
-            "1", "true", "yes", "on"):
-        return SCOPES + [SEND_SCOPE]
-    return SCOPES
+    scopes = list(SCOPES)
+    # Mail-only mode: drop Calendars.Read. Useful when the tenant restricts (or
+    # requires admin consent for) calendar access but mail is already consented —
+    # the existing mail consent then covers the request, so no re-consent/admin is
+    # needed. EVOSQL_OUTLOOK_NO_CALENDAR=1 (or EVOSQL_OUTLOOK_MAIL_ONLY=1).
+    if _truthy(os.environ.get("EVOSQL_OUTLOOK_NO_CALENDAR")) or \
+            _truthy(os.environ.get("EVOSQL_OUTLOOK_MAIL_ONLY")):
+        scopes = [s for s in scopes if "Calendars.Read" not in s]
+    if _truthy(os.environ.get("EVOSQL_OUTLOOK_SEND")):
+        scopes = scopes + [SEND_SCOPE]
+    return scopes
 
 
 class AuthError(Exception):
