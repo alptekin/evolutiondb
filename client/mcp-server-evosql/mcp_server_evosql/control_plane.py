@@ -20,9 +20,11 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
@@ -169,6 +171,99 @@ class ControlPlane:
                     "ok" if result.get("ok") else "partial",
                     ref=f"{tenant_id}:dek={bool(rotate_dek)}")
         return result
+
+    def _backup_root(self, name: str) -> str:
+        """The control plane's backups area for one tenant's K8s name. Persisted
+        on EVOSQL_BACKUP_DIR (mount a volume there to survive pod restarts);
+        falls back to a temp dir for dev/tests."""
+        base = (os.environ.get("EVOSQL_BACKUP_DIR", "").strip()
+                or os.path.join(tempfile.gettempdir(), "evosql-backups"))
+        return os.path.join(base, name)
+
+    def backup(self, operator, tenant_id: str) -> dict:
+        """Back up a DEDICATED tenant's data dir to the control plane's backups
+        area (EVOSQL_BACKUP_DIR/<tenant>/<timestamp>). Online — the tenant keeps
+        serving. Returns the backup id. Shared-pool tenants share one engine, so
+        per-tenant backup applies only to dedicated tenants."""
+        meta = self.registry().get_tenant(tenant_id)
+        if not meta:
+            raise KeyError(tenant_id)
+        if meta.get("tier") != "dedicated":
+            raise ValueError("backup applies only to dedicated tenants")
+        name = tenancy.tenant_k8s_name(tenant_id)
+        backup_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
+        dest = os.path.join(self._backup_root(name), backup_id)
+        self._dedicated_backend().backup(tenant_id, dest)
+        self._prune_backups(name)   # opt-in retention (EVOSQL_BACKUP_KEEP)
+        self._audit(operator, "backup", "ok", ref=f"{tenant_id}:{backup_id}")
+        return {"tenant_id": tenant_id, "backup": backup_id}
+
+    def _prune_backups(self, name: str) -> None:
+        """Keep only the EVOSQL_BACKUP_KEEP newest backups for a tenant (0 =
+        keep all, the default). Backup ids are timestamps, so a reverse sort is
+        newest-first. Best-effort; never blocks a successful backup."""
+        try:
+            keep = int(os.environ.get("EVOSQL_BACKUP_KEEP", "0") or "0")
+        except ValueError:
+            keep = 0
+        if keep <= 0:
+            return
+        root = self._backup_root(name)
+        try:
+            dirs = sorted((e for e in os.listdir(root)
+                           if os.path.isdir(os.path.join(root, e))), reverse=True)
+        except OSError:
+            return
+        import shutil
+        for old in dirs[keep:]:
+            shutil.rmtree(os.path.join(root, old), ignore_errors=True)
+
+    def list_backups(self, tenant_id: str) -> dict:
+        """A dedicated tenant's available backups (newest first)."""
+        if not self.registry().get_tenant(tenant_id):
+            raise KeyError(tenant_id)
+        root = self._backup_root(tenancy.tenant_k8s_name(tenant_id))
+        out = []
+        try:
+            entries = os.listdir(root)
+        except OSError:
+            entries = []
+        for e in entries:
+            p = os.path.join(root, e)
+            if not os.path.isdir(p):
+                continue
+            try:
+                created = datetime.fromtimestamp(
+                    os.path.getmtime(p), timezone.utc).isoformat()
+            except OSError:
+                created = ""
+            out.append({"id": e, "created": created})
+        out.sort(key=lambda b: b["id"], reverse=True)
+        return {"tenant_id": tenant_id, "backups": out}
+
+    def restore(self, operator, tenant_id: str, backup_id: str) -> dict:
+        """Restore a DEDICATED tenant from one of its backups (the data dir is
+        replaced from the backup). Offline for that ONE tenant only; IRREVERSIBLE
+        — the HTTP layer requires confirm. ``backup_id`` must be a single safe
+        path component that resolves to an existing backup under the tenant's
+        backups root (no traversal)."""
+        meta = self.registry().get_tenant(tenant_id)
+        if not meta:
+            raise KeyError(tenant_id)
+        if meta.get("tier") != "dedicated":
+            raise ValueError("restore applies only to dedicated tenants")
+        if (not backup_id or "/" in backup_id or "\\" in backup_id
+                or backup_id in (".", "..")):
+            raise ValueError("invalid backup id")
+        root = self._backup_root(tenancy.tenant_k8s_name(tenant_id))
+        src = os.path.join(root, backup_id)
+        rp_root, rp_src = os.path.realpath(root), os.path.realpath(src)
+        if not (rp_src == rp_root or rp_src.startswith(rp_root + os.sep)) \
+                or not os.path.isdir(rp_src):
+            raise ValueError(f"unknown backup {backup_id!r}")
+        self._dedicated_backend().restore(tenant_id, src)
+        self._audit(operator, "restore", "ok", ref=f"{tenant_id}:{backup_id}")
+        return {"tenant_id": tenant_id, "restored": backup_id}
 
     def issue_token(self, operator, tenant_id: str, user_id: str,
                     roles=("admin",), ttl_days: int = 90) -> dict:
@@ -390,6 +485,10 @@ class Handler(BaseHTTPRequestHandler):
             user = q.get("user", [""])[0]
             tid = urllib.parse.unquote(parts[2])
             return self._safe(lambda: self.cp.list_accounts(tid, user))
+        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "tenants"
+                and parts[3] == "backups"):
+            tid = urllib.parse.unquote(parts[2])
+            return self._safe(lambda: self.cp.list_backups(tid))
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):
@@ -420,6 +519,14 @@ class Handler(BaseHTTPRequestHandler):
             if action == "rotate-key":
                 return self._safe(lambda: self.cp.rotate_key(
                     op, tid, body.get("rotate_dek", True)))
+            if action == "backup":
+                return self._safe(lambda: self.cp.backup(op, tid))
+            if action == "restore":
+                if not body.get("confirm"):
+                    return self._json(400, {"error": "confirm=true required "
+                                            "(replaces the tenant's data)"})
+                return self._safe(lambda: self.cp.restore(
+                    op, tid, body.get("backup", "")))
             if action == "token":
                 roles = body.get("roles") or ["admin"]
                 return self._safe(lambda: self.cp.issue_token(

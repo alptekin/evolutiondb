@@ -294,6 +294,81 @@ def test_rotate_key_dedicated_only():
         s.close(); os.environ.pop("EVOSQL_CONTROL_TOKEN", None)
 
 
+def test_backup_list_restore_dedicated():
+    import tempfile, shutil
+    os.environ["EVOSQL_CONTROL_TOKEN"] = TOKEN
+    bdir = tempfile.mkdtemp(prefix="evo-bktest-")
+    os.environ["EVOSQL_BACKUP_DIR"] = bdir
+    s = _Srv()
+    try:
+        s.req("POST", "/api/tenants", {"tenant_id": "acme", "admin_user": "admin"})
+
+        # a fake dedicated backend: backup writes a marker dir, restore records
+        class FakeK8s:
+            def __init__(self):
+                self.restored = []
+
+            def backup(self, tid, dest_dir):
+                os.makedirs(dest_dir, exist_ok=True)
+                with open(os.path.join(dest_dir, "evosql.db"), "wb") as fh:
+                    fh.write(b"snapshot")
+                return dest_dir
+
+            def restore(self, tid, src_dir):
+                self.restored.append(src_dir)
+                return {"ok": True}
+        fake = FakeK8s()
+        s.cp._dedicated_backend = lambda: fake
+
+        # backup/restore refused on a shared-tier tenant
+        code, body = s.req("POST", "/api/tenants/acme/backup")
+        assert code == 400 and "dedicated" in body.get("error", ""), (code, body)
+
+        s.req("POST", "/api/tenants/acme/tier", {"tier": "dedicated"})
+
+        # backup -> creates a snapshot, list shows it
+        code, body = s.req("POST", "/api/tenants/acme/backup")
+        assert code == 200 and body["backup"], (code, body)
+        bid = body["backup"]
+        code, body = s.req("GET", "/api/tenants/acme/backups")
+        assert code == 200 and any(b["id"] == bid for b in body["backups"]), body
+
+        # restore without confirm is refused
+        code, _ = s.req("POST", "/api/tenants/acme/restore", {"backup": bid})
+        assert code == 400
+
+        # restore with confirm calls the backend on the resolved backup path
+        code, body = s.req("POST", "/api/tenants/acme/restore",
+                           {"backup": bid, "confirm": True})
+        assert code == 200 and body["restored"] == bid, (code, body)
+        assert fake.restored and fake.restored[0].endswith(bid)
+
+        # path traversal in the backup id is rejected
+        for evil in ["../../etc", "a/b", "..", ""]:
+            code, _ = s.req("POST", "/api/tenants/acme/restore",
+                            {"backup": evil, "confirm": True})
+            assert code == 400, f"traversal {evil!r} should be 400, got {code}"
+
+        # operator gate
+        code, _ = s.req("POST", "/api/tenants/acme/backup", token=None)
+        assert code == 401
+
+        # retention: EVOSQL_BACKUP_KEEP prunes to the N newest
+        os.environ["EVOSQL_BACKUP_KEEP"] = "1"
+        try:
+            for _ in range(3):
+                s.req("POST", "/api/tenants/acme/backup")
+            code, body = s.req("GET", "/api/tenants/acme/backups")
+            assert code == 200 and len(body["backups"]) == 1, body
+        finally:
+            os.environ.pop("EVOSQL_BACKUP_KEEP", None)
+    finally:
+        s.close()
+        os.environ.pop("EVOSQL_CONTROL_TOKEN", None)
+        os.environ.pop("EVOSQL_BACKUP_DIR", None)
+        shutil.rmtree(bdir, ignore_errors=True)
+
+
 def test_rotate_key_unconfigured_backend_errors():
     # with no EVOSQL_TENANT_IMAGE, the real _dedicated_backend refuses cleanly
     os.environ["EVOSQL_CONTROL_TOKEN"] = TOKEN
@@ -321,6 +396,7 @@ if __name__ == "__main__":
     run("connected_accounts_list_and_revoke", test_connected_accounts_list_and_revoke)
     run("oauth_consents_list_and_revoke", test_oauth_consents_list_and_revoke)
     run("rotate_key_dedicated_only", test_rotate_key_dedicated_only)
+    run("backup_list_restore_dedicated", test_backup_list_restore_dedicated)
     run("rotate_key_unconfigured_backend_errors", test_rotate_key_unconfigured_backend_errors)
     print(f"\nResults: {passed} passed, {failed} failed out of {passed + failed}")
     sys.exit(1 if failed > 0 else 0)
