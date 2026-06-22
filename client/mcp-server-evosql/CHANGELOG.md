@@ -2,6 +2,53 @@
 
 All notable changes to `mcp-server-evolutiondb` are documented here.
 
+## 1.17.0 — Multi-tenant SaaS: tenancy backends, governance + operator control plane
+
+### Added
+- **Per-tenant spawn backends**: `TenantSupervisor` (process-per-tenant) and
+  `KubernetesTenantBackend` (pod-per-tenant — a StatefulSet + Service + Secret +
+  PVC each), duck-type compatible behind `TenantRouter` (shared + dedicated
+  tiers). Both expose `backup` / `restore` / `rotate_key`; the Kubernetes path is
+  proven end-to-end on a local `kind` cluster.
+- **Operator control plane** (`evosql-control-plane`): an operator-authenticated
+  (OIDC allowlist + static token) web UI + JSON API — provision / suspend /
+  resume / set-tier / delete, issue tokens, DSAR export+erase, OAuth-consent
+  revoke, connected-accounts list/revoke, at-rest **KMS key rotation**,
+  **backup/restore**, and a **per-tenant connector allow-list**.
+- **Per-tenant connector allow-list** (`connectors_allowed`): an operator
+  restricts which connectors a tenant may use; enforced in the connector token
+  store (a disallowed connector cannot establish a token and reads inert) plus
+  immediate revoke of disallowed connections.
+- **Governance**: DSAR (subject data export + erase with receipts), automated
+  at-rest key rotation (KMS-provider-agnostic, two-phase fail-closed), and a
+  no-train / data-residency egress gate.
+
+### Changed
+- **Engine fails closed on a wrong/missing encryption key**: the server exits
+  non-zero before binding any listener when an existing encrypted data file
+  cannot be decrypted (previously the init failure was swallowed and the port
+  bound anyway). A wrong-key start is now observably "down" — the invariant the
+  Kubernetes readiness probe and the supervisor's pending-key recovery rely on.
+
+Everything here is OFF by default — single-user / non-tenant deployments are
+byte-for-byte unchanged; multi-tenancy activates only when `EVOSQL_TENANT_SECRET`
+is set.
+
+## 1.16.0 — Provider-agnostic LLM + searchable history + self-brief
+- Provider-agnostic chat resolver (`llm.py`: Anthropic default + OpenAI-compatible
+  + Ollama), the `claude-session-sync` connector (past conversations become
+  searchable), and scheduled self-delivery of the morning brief. All opt-in.
+
+## 1.15.0 — PII retrieval masking + N-approver
+- Role-based PII masking of read-tool returns (`pii_gate`), the ADR-004
+  N-approver quorum for sends, and the `azure-devops-sync` connector.
+
+## 1.14.0 — Multi-tenant business platform (phases 0–4)
+- The multi-tenant program: per-request `Identity` + DB-level tenant isolation,
+  `meeting_brief` + GitHub/Azure-DevOps open-loops, Claude code-review drafted to
+  a human-approved PR comment, release tools, tenant audit + retention,
+  templates, and the rule engine. All opt-in.
+
 ## 1.13.1 — Locale layer phase 2 (language-neutral source)
 
 ### Changed
