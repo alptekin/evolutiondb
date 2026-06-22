@@ -22,10 +22,20 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import os
 from typing import Callable, Dict, Iterator, List, Optional
 
 
 GRAPH_API = "https://graph.microsoft.com/v1.0"
+
+# Fast backfill: fetch NEWEST-first so the recent window (what a user usually
+# asks for) lands first instead of after grinding through months of old mail.
+# (Incremental daemon passes are small, so the default stays asc for a
+# monotonic watermark.) Toggle: EVOSQL_OUTLOOK_FAST_BACKFILL=1.
+_MSG_ORDER = ("receivedDateTime desc"
+              if str(os.environ.get("EVOSQL_OUTLOOK_FAST_BACKFILL", "")).strip()
+              .lower() in ("1", "true", "yes", "on")
+              else "receivedDateTime asc")
 
 # Per-request socket timeout. Graph occasionally takes >30s to return a
 # fat 50-message page on a cold 365d backfill, so the read times out
@@ -194,9 +204,12 @@ class OutlookClient:
                       top: int = 50,
                       folder_filter: Optional[str] = None
                       ) -> Iterator[Dict]:
-        """Yield message dicts in ascending `receivedDateTime` order
-        so the watermark we record at the end of the pass is the
-        highest value seen.
+        """Yield message dicts ordered by `receivedDateTime` — ascending
+        by default, or newest-first when EVOSQL_OUTLOOK_FAST_BACKFILL is
+        set (see `_MSG_ORDER`). The sync loop records the watermark as the
+        MAX received_at over the whole pass, so either order is correct;
+        newest-first just makes the recent window land before months of
+        old mail on a cold backfill.
 
         `received_after_iso` is a UTC ISO 8601 timestamp like
         `2026-05-20T00:00:00Z`. Graph requires the value be quoted
@@ -205,7 +218,7 @@ class OutlookClient:
         params: Dict[str, str] = {
             "$select":  MESSAGE_SELECT,
             "$top":     str(top),
-            "$orderby": "receivedDateTime asc",
+            "$orderby": _MSG_ORDER,
         }
         filters: List[str] = []
         if received_after_iso:
@@ -230,7 +243,7 @@ class OutlookClient:
         params: Dict[str, str] = {
             "$select":  MESSAGE_SELECT,
             "$top":     str(top),
-            "$orderby": "receivedDateTime asc",
+            "$orderby": _MSG_ORDER,
         }
         if received_after_iso:
             params["$filter"] = (
