@@ -69,6 +69,12 @@ spec:
               value: {{ .Release.Namespace | quote }}
             - name: EVOSQL_TENANT_IMAGE
               value: "{{ .Values.controlPlane.tenant.image.repository }}:{{ .Values.controlPlane.tenant.image.tag }}"
+            # -- where dedicated-tenant backups land (mount a PVC here to persist
+            #    them across control-plane restarts; emptyDir is ephemeral) --
+            - name: EVOSQL_BACKUP_DIR
+              value: {{ .Values.controlPlane.ui.backupDir | quote }}
+            - name: EVOSQL_BACKUP_KEEP
+              value: {{ .Values.controlPlane.ui.backupKeep | quote }}
             {{- if .Values.controlPlane.ui.controlToken }}
             - name: EVOSQL_CONTROL_TOKEN
               valueFrom:
@@ -85,6 +91,9 @@ spec:
             - name: EVOSQL_CONTROL_OPERATORS
               value: {{ .Values.controlPlane.ui.operators | quote }}
             {{- end }}
+          volumeMounts:
+            - name: backups
+              mountPath: {{ .Values.controlPlane.ui.backupDir | quote }}
           resources:
             {{- toYaml .Values.controlPlane.ui.resources | nindent 12 }}
           readinessProbe:
@@ -98,6 +107,14 @@ spec:
               port: web
             initialDelaySeconds: 15
             periodSeconds: 20
+      volumes:
+        - name: backups
+          {{- if .Values.controlPlane.ui.backupExistingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.controlPlane.ui.backupExistingClaim | quote }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
 ---
 apiVersion: v1
 kind: Service
