@@ -105,6 +105,9 @@ controlPlane:
     ratePerMin: 120
     tenantSecret: ""            # REQUIRED when enabled — derives every tenant DB password
     controlToken: ""            # static operator superuser token (fallback to OIDC)
+    backupDir: /var/lib/evosql/backups   # where dedicated-tenant backups are written
+    backupExistingClaim: ""     # PVC name to persist backups; empty = emptyDir (ephemeral)
+    backupKeep: 0               # retention: keep N newest backups per tenant (0 = keep all)
     operators: ""               # comma list of OIDC sub/email allowed as operators
     oidc:
       issuer: ""                # EVOSQL_OIDC_ISSUER — operator SSO (MFA at the IdP)

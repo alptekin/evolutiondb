@@ -16,3 +16,9 @@ Password: stored in secret "{{ include "evolutiondb.secretName" . }}"
 Password: auto-generated — check pod logs:
   kubectl logs {{ include "evolutiondb.fullname" . }}-0 -n {{ .Release.Namespace }} | grep Password
 {{- end }}
+{{- if and .Values.controlPlane.ui.enabled (not .Values.controlPlane.ui.backupExistingClaim) }}
+
+WARNING: the control-plane UI stores tenant backups on an emptyDir volume, so
+they are LOST when the control-plane pod restarts or reschedules. For durable
+backups set controlPlane.ui.backupExistingClaim to a PersistentVolumeClaim.
+{{- end }}
