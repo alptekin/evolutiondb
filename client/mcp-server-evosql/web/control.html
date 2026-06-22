@@ -94,6 +94,15 @@
 <script>
 const $ = s => document.querySelector(s);
 function esc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
+// Escape a value that is interpolated into an inline handler — a JS single-quoted
+// string inside a double-quoted HTML attribute, e.g. onclick="fn('VALUE')". esc()
+// alone does NOT escape ' or ", so a tenant id / connector / client id containing
+// either would break out of the handler. jsq() handles BOTH layers: &<>" at the
+// HTML level (so " cannot close the attribute) and \ ' at the JS level (so '
+// cannot close the string). For TEXT positions keep using esc().
+function jsq(s){return String(s==null?'':s)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+  .replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
 function token(){return localStorage.getItem('evosql_op_token')||'';}
 function saveToken(){localStorage.setItem('evosql_op_token',$('#token').value.trim());toast('token saved');load();}
 function toast(msg,err){const t=$('#toast');t.textContent=msg;t.className='show'+(err?' err':'');setTimeout(()=>t.className='',3200);}
@@ -117,19 +126,19 @@ async function load(){
       const sus=t.status==='suspended';
       const tier=t.tier==='dedicated'?'<span class="pill dedicated">dedicated</span>':'<span class="pill">shared</span>';
       const st=`<span class="pill ${esc(t.status)}">${esc(t.status)}</span>`;
-      const id=esc(t.tenant_id);
+      const id=esc(t.tenant_id), idj=jsq(t.tenant_id);
       return `<tr>
         <td><strong>${id}</strong></td><td>${esc(t.name||'')}</td>
         <td>${tier}</td><td>${st}</td><td>${esc((t.created||'').slice(0,19).replace('T',' '))}</td>
         <td><div class="acts">
-          ${sus?`<button onclick="act('${id}','resume')">Resume</button>`
-               :`<button onclick="act('${id}','suspend')">Suspend</button>`}
-          <button onclick="issueToken('${id}')">Token</button>
-          <button onclick="setTier('${id}','${t.tier==='dedicated'?'shared':'dedicated'}')">→ ${t.tier==='dedicated'?'shared':'dedicated'}</button>
-          ${t.tier==='dedicated'?`<button onclick="rotateKey('${id}')">Rotate key</button>`:''}
-          <button onclick="accounts('${id}')">Accounts</button>
-          <button onclick="dsar('${id}')">DSAR</button>
-          <button class="danger" onclick="del('${id}')">Delete</button>
+          ${sus?`<button onclick="act('${idj}','resume')">Resume</button>`
+               :`<button onclick="act('${idj}','suspend')">Suspend</button>`}
+          <button onclick="issueToken('${idj}')">Token</button>
+          <button onclick="setTier('${idj}','${t.tier==='dedicated'?'shared':'dedicated'}')">→ ${t.tier==='dedicated'?'shared':'dedicated'}</button>
+          ${t.tier==='dedicated'?`<button onclick="rotateKey('${idj}')">Rotate key</button>`:''}
+          <button onclick="accounts('${idj}')">Accounts</button>
+          <button onclick="dsar('${idj}')">DSAR</button>
+          <button class="danger" onclick="del('${idj}')">Delete</button>
         </div></td></tr>`;
     }).join('');
   }catch(e){ $('#rows').innerHTML=`<tr><td colspan="6" class="empty">${esc(e.message)}</td></tr>`; toast(e.message,true);}
@@ -190,7 +199,7 @@ async function accounts(id){
     const rows = accounts.length ? accounts.map(a=>
       `<tr><td><strong>${esc(a.connector)}</strong></td>
         <td class="muted">${a.updated?esc(new Date(a.updated*1000).toISOString().slice(0,19).replace('T',' ')):''}</td>
-        <td><button class="danger" onclick="revokeAccount('${esc(id)}','${esc(a.connector)}')">Revoke</button></td></tr>`).join('')
+        <td><button class="danger" onclick="revokeAccount('${jsq(id)}','${jsq(a.connector)}')">Revoke</button></td></tr>`).join('')
       : `<tr><td colspan="3" class="muted">No connected accounts.</td></tr>`;
     modal(`Connected accounts · ${esc(id)}`,
       `<table style="width:100%"><thead><tr><th>Connector</th><th>Updated</th><th></th></tr></thead><tbody>${rows}</tbody></table>`);
@@ -208,7 +217,7 @@ async function consents(){
     const rows = consents.length ? consents.map(c=>
       `<tr><td><strong>${esc(c.client_id)}</strong></td><td class="muted">${esc(c.scope||'')}</td>
         <td class="muted">${esc(c.approved_by||'')}</td>
-        <td><button class="danger" onclick="revokeConsent('${esc(c.client_id)}')">Revoke</button></td></tr>`).join('')
+        <td><button class="danger" onclick="revokeConsent('${jsq(c.client_id)}')">Revoke</button></td></tr>`).join('')
       : `<tr><td colspan="4" class="muted">No remembered OAuth approvals.</td></tr>`;
     modal(`Remembered OAuth approvals · ${esc(namespace)}`,
       `<table style="width:100%"><thead><tr><th>Client</th><th>Scope</th><th>By</th><th></th></tr></thead><tbody>${rows}</tbody></table>`);
