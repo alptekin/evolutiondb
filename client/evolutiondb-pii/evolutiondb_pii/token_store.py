@@ -32,6 +32,21 @@ from typing import Dict, Optional
 
 DEFAULT_STORE = "mcp_tokens"
 
+# A tenant's connector ALLOW-list lives in the SAME token store, in the SAME
+# namespace as that tenant's tokens (so it is isolated exactly like the tokens —
+# the "mcp_tokens" store is shared across tenant DBs and separated by namespace,
+# so a fixed policy namespace would be GLOBAL; a reserved KEY in the token
+# namespace is correctly per-tenant). Written by the control plane via the
+# tenant's own DB; a connector daemon enforces it with its own connection — no
+# cross-package / admin-registry access. Absent row OR a null list = every
+# connector allowed (backward compatible).
+POLICY_KEY = "__connector_policy__"
+
+
+class ConnectorNotAllowed(PermissionError):
+    """A connector token was set/loaded for a connector not on the tenant's
+    allow-list."""
+
 
 def _secret_from(env) -> str:
     env = env if env is not None else os.environ
@@ -106,9 +121,43 @@ class TokenStore:
         return AESGCM(self._key()).decrypt(nonce, ct,
                                            self._binding()).decode("utf-8")
 
+    # -- allow-list -------------------------------------------------------
+    def _policy_allows(self) -> bool:
+        """True unless an allow-list row exists at (this namespace, POLICY_KEY)
+        AND excludes this connector. FAIL-OPEN by design: a missing row OR ANY
+        read error -> allowed. So (a) an un-policed tenant is byte-for-byte
+        unchanged, (b) a transient DB error never breaks an allowed connector,
+        and (c) a namespace the control plane has not mirrored the policy to is
+        NOT enforced here — this is a best-effort defense-in-depth gate, NOT a
+        hard control. The hard controls are the control-plane revoke (which
+        deletes disallowed tokens) and the engine's per-DB GRANT."""
+        try:
+            from .store_io import fetch_row
+            row = fetch_row(self._connection(), self.store, self.namespace,
+                            POLICY_KEY)
+        except Exception:
+            return True
+        if not row:
+            return True
+        allowed = row.get("connectors")
+        if allowed is None:
+            return True
+        try:
+            return self.connector in allowed
+        except Exception:
+            return True
+
     # -- api --------------------------------------------------------------
     def load(self) -> Dict:
-        """Return the decrypted token dict, or {} if none stored."""
+        """Return the decrypted token dict, or {} if none stored. A connector that
+        is not on this namespace's allow-list reads as {} — inert for the
+        store-backed token (a connector still holding a local file/env token can
+        keep acting; the hard boundary remains the provider/OAuth + the engine's
+        per-DB GRANT). Enforcement is best-effort + fail-open (see
+        _policy_allows); the control plane's revoke is the authoritative
+        cleanup."""
+        if not self._policy_allows():
+            return {}
         from .store_io import fetch_row
         row = fetch_row(self._connection(), self.store, self.namespace, self.key_name)
         if not row or "enc" not in row:
@@ -116,6 +165,13 @@ class TokenStore:
         return json.loads(self._open(row["enc"]))
 
     def save(self, data: Dict) -> None:
+        """Store the token, unless the tenant's allow-list excludes this
+        connector (then refuse, so a disallowed connector can never establish a
+        token)."""
+        if not self._policy_allows():
+            raise ConnectorNotAllowed(
+                f"connector {self.connector!r} is not on this tenant's "
+                f"connector allow-list")
         from .store_io import write_row
         blob = self._seal(json.dumps(data, ensure_ascii=False))
         write_row(self._connection(), self.store, self.namespace, self.key_name,

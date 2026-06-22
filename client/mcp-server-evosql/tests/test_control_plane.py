@@ -369,6 +369,66 @@ def test_backup_list_restore_dedicated():
         shutil.rmtree(bdir, ignore_errors=True)
 
 
+def test_connector_policy_constants_in_sync():
+    # The control plane writes the allow-list under control_plane._CONNECTOR_POLICY_KEY;
+    # the connectors read it under token_store.POLICY_KEY. If those ever drift the
+    # policy is written to a key TokenStore never reads -> enforcement SILENTLY
+    # fails open. Guard the coupling here. Also: CANONICAL_CONNECTORS must be
+    # lowercase (set_connectors lowercases input before the membership check).
+    assert all(c == c.lower() for c in tenancy.CANONICAL_CONNECTORS)
+    pii = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))), "evolutiondb-pii")
+    if os.path.isdir(pii) and pii not in sys.path:
+        sys.path.insert(0, pii)
+    try:
+        from evolutiondb_pii.token_store import POLICY_KEY
+    except Exception:
+        return  # the pii package isn't importable here; skip the cross-check
+    assert control_plane._CONNECTOR_POLICY_KEY == POLICY_KEY, (
+        "control_plane._CONNECTOR_POLICY_KEY must equal token_store.POLICY_KEY")
+
+
+def test_set_connectors_allow_list_and_revoke():
+    os.environ["EVOSQL_CONTROL_TOKEN"] = TOKEN
+    s = _Srv()
+    try:
+        s.req("POST", "/api/tenants", {"tenant_id": "acme", "admin_user": "acme"})
+        tb = s.cp.tenant_backend("acme", "acme")
+        tb.put("mcp_tokens", "acme", "token:gmail", {"enc": "X", "updated": 1})
+        tb.put("mcp_tokens", "acme", "token:slack", {"enc": "Y", "updated": 2})
+
+        # set allow-list to gmail only -> slack is revoked, meta persisted
+        code, body = s.req("POST", "/api/tenants/acme/connectors",
+                           {"connectors": ["gmail"]})
+        assert code == 200 and body["connectors_allowed"] == ["gmail"], (code, body)
+        assert any(r["connector"] == "slack" for r in body["revoked"]), body
+        assert s.cp.registry().get_tenant("acme")["connectors_allowed"] == ["gmail"]
+
+        # list: gmail present + allowed, slack gone (revoked); allow-list echoed
+        code, body = s.req("GET", "/api/tenants/acme/accounts")
+        names = {a["connector"]: a["allowed"] for a in body["accounts"]}
+        assert names.get("gmail") is True and "slack" not in names, body
+        assert body["connectors_allowed"] == ["gmail"]
+
+        # an unknown connector name is rejected
+        code, _ = s.req("POST", "/api/tenants/acme/connectors",
+                        {"connectors": ["bogus-connector"]})
+        assert code == 400
+
+        # clearing (null) -> all allowed again
+        code, body = s.req("POST", "/api/tenants/acme/connectors",
+                           {"connectors": None})
+        assert code == 200 and body["connectors_allowed"] is None
+        assert s.cp.registry().get_tenant("acme")["connectors_allowed"] is None
+
+        # operator gate
+        code, _ = s.req("POST", "/api/tenants/acme/connectors",
+                        {"connectors": ["gmail"]}, token=None)
+        assert code == 401
+    finally:
+        s.close(); os.environ.pop("EVOSQL_CONTROL_TOKEN", None)
+
+
 def test_rotate_key_unconfigured_backend_errors():
     # with no EVOSQL_TENANT_IMAGE, the real _dedicated_backend refuses cleanly
     os.environ["EVOSQL_CONTROL_TOKEN"] = TOKEN
@@ -397,6 +457,8 @@ if __name__ == "__main__":
     run("oauth_consents_list_and_revoke", test_oauth_consents_list_and_revoke)
     run("rotate_key_dedicated_only", test_rotate_key_dedicated_only)
     run("backup_list_restore_dedicated", test_backup_list_restore_dedicated)
+    run("connector_policy_constants_in_sync", test_connector_policy_constants_in_sync)
+    run("set_connectors_allow_list_and_revoke", test_set_connectors_allow_list_and_revoke)
     run("rotate_key_unconfigured_backend_errors", test_rotate_key_unconfigured_backend_errors)
     print(f"\nResults: {passed} passed, {failed} failed out of {passed + failed}")
     sys.exit(1 if failed > 0 else 0)
