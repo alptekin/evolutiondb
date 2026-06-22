@@ -2869,6 +2869,22 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "inbox_digest",
+        "description": (
+            "Summarize RECEIVED work email (gmail/outlook) over a date range as "
+            "structured data: each message's date, sender and subject, whether "
+            "the user replied, plus per-sender totals. Call this when the user "
+            "asks for an email summary, who emailed them, or a catch-up after "
+            "being away. `since` accepts an ISO date (YYYY-MM-DD) or a keyword: "
+            "today, yesterday, this_week, last_week, last_month. `until` is an "
+            "optional ISO date (defaults to now)."
+        ),
+        "inputSchema": {"type": "object", "properties": {
+            "since": {"type": "string", "default": "last_week"},
+            "until": {"type": "string"},
+        }},
+    },
+    {
         "name": "meeting_brief",
         "description": (
             "Summarise the user's meetings for a day — each meeting's time, "
@@ -3578,6 +3594,12 @@ class MCPServer:
                                 lang_set=was_set)
             return {"ok": True, "brief": text,
                     "waiting_on_you": len(data["waiting_me"])}
+
+        if name == "inbox_digest":
+            from . import inbox_digest
+            return inbox_digest.collect(b, uid,
+                                        since=args.get("since") or "last_week",
+                                        until=args.get("until"))
 
         if name == "meeting_brief":
             from . import meeting, prefs
