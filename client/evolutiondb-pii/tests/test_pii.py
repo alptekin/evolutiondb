@@ -57,11 +57,11 @@ class TestDetection(unittest.TestCase):
         self.rules = load_rules()
 
     def test_email_detection(self):
-        txt = "Contact alptekin.topal@wechiptech.com for details"
+        txt = "Contact sam.carter@example.com for details"
         ms = detect(txt, self.rules)
         self.assertEqual(len(ms), 1)
         self.assertEqual(ms[0].tag, "email")
-        self.assertEqual(ms[0].text, "alptekin.topal@wechiptech.com")
+        self.assertEqual(ms[0].text, "sam.carter@example.com")
 
     def test_credit_card_passes_luhn(self):
         txt = "Card: 4111 1111 1111 1111 is the test number"
