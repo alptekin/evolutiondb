@@ -113,7 +113,10 @@
       "invoices@",
       "orders@",
       "automated@",
-      "system@"
+      "system@",
+      "@notifications.",
+      "@reply.",
+      "@mailer."
     ],
     "honorific_pre": [
       "Dr",
