@@ -58,7 +58,7 @@ def _seed(b, ns):
 
 
 def test_digest_window_reply_and_totals():
-    b = FakeBackend(); ns = "alptekin_topal"; _seed(b, ns)
+    b = FakeBackend(); ns = "sam_carter"; _seed(b, ns)
     out = inbox_digest.collect(b, ns, since="2026-06-15", until="2026-06-21")
     assert out["ok"] is True, out
     # 3 received emails in window (Alice, Bob, Carol); Dave (old) + teams excluded
@@ -199,21 +199,21 @@ def test_alias_chaser_question_does_not_close():
 def test_forward_is_not_a_colleague():
     # A forward (Fwd:) of a same-subject Outlook mail is not someone answering.
     b = FakeBackend(); ns = "t"
-    _outlook(b, ns, "o1", "Kaan Karagöz <kaan@bkm.com>", "Rapor", 18)
-    _outlook(b, ns, "o2", "Özge Özkan <ozge@bkm.com>", "Fwd: Rapor", 19)
+    _outlook(b, ns, "o1", "Dana Reed <dana@partnerco.example>", "Rapor", 18)
+    _outlook(b, ns, "o2", "Robin Voss <robin@partnerco.example>", "Fwd: Rapor", 19)
     out = inbox_digest.collect(b, ns, **_W)
-    assert _by_from(out, "Kaan Karagöz", 18)["status"] == "open"
+    assert _by_from(out, "Dana Reed", 18)["status"] == "open"
 
 
 def test_handoff_in_quoted_history_is_ignored():
     # The handoff phrase appears only in the QUOTED thread below a fresh ask ->
     # it is old context, not this message, so the email stays open.
     b = FakeBackend(); ns = "t"
-    _gmail(b, ns, "g1", "Mehmet K <m@x.com>", "T22", 16, subj="Bütçe")
-    _gmail(b, ns, "g2", "Mehmet K <m@x.com>", "T22", 17, subj="Re: Bütçe",
+    _gmail(b, ns, "g1", "Lee Park <m@x.com>", "T22", 16, subj="Bütçe")
+    _gmail(b, ns, "g2", "Lee Park <m@x.com>", "T22", 17, subj="Re: Bütçe",
            snip="Yeni rakamları gönderir misin?\nOn 2026-06-16 wrote:\n> telefonda görüştük")
     out = inbox_digest.collect(b, ns, **_W)
-    assert _by_from(out, "Mehmet K", 16)["status"] == "open"
+    assert _by_from(out, "Lee Park", 16)["status"] == "open"
 
 
 def test_handoff_with_fresh_request_stays_open():
@@ -259,23 +259,23 @@ def test_outlook_same_subject_collision_is_not_a_colleague():
     # Two UNRELATED fresh emails share a templated subject (no Re:). Outlook keys
     # threads by normalized subject, but neither is a reply -> both stay open.
     b = FakeBackend(); ns = "t"
-    _outlook(b, ns, "o1", "Kaan Karagöz <kaan@bkm.com>", "Ödeme Bildirimi", 18)
-    _outlook(b, ns, "o2", "Özge Özkan <ozge@bkm.com>", "Ödeme Bildirimi", 19)
+    _outlook(b, ns, "o1", "Dana Reed <dana@partnerco.example>", "Ödeme Bildirimi", 18)
+    _outlook(b, ns, "o2", "Robin Voss <robin@partnerco.example>", "Ödeme Bildirimi", 19)
     out = inbox_digest.collect(b, ns, **_W)
-    assert _by_from(out, "Kaan Karagöz", 18)["status"] == "open"
-    assert _by_from(out, "Özge Özkan", 19)["status"] == "open"
+    assert _by_from(out, "Dana Reed", 18)["status"] == "open"
+    assert _by_from(out, "Robin Voss", 19)["status"] == "open"
     assert out["handled"] == 0
 
 
 def test_outlook_real_reply_prefix_counts_as_colleague():
     # A genuine reply-all (Re:) from a different human IS a colleague reply.
     b = FakeBackend(); ns = "t"
-    _outlook(b, ns, "o1", "Kaan Karagöz <kaan@bkm.com>", "Proje X", 18)
-    _outlook(b, ns, "o2", "Özge Özkan <ozge@bkm.com>", "Re: Proje X", 19)
+    _outlook(b, ns, "o1", "Dana Reed <dana@partnerco.example>", "Proje X", 18)
+    _outlook(b, ns, "o2", "Robin Voss <robin@partnerco.example>", "Re: Proje X", 19)
     out = inbox_digest.collect(b, ns, **_W)
-    first = _by_from(out, "Kaan Karagöz", 18)
+    first = _by_from(out, "Dana Reed", 18)
     assert first["status"] == "replied_by_colleague", first
-    assert first["by_whom"] == "Özge Özkan" and first["replied"] is False
+    assert first["by_whom"] == "Robin Voss" and first["replied"] is False
     # Outlook subject-keyed -> flagged for confirmation (no real conversation id).
     assert first["maybe"] is True
 
@@ -285,26 +285,79 @@ def test_outlook_is_sent_flag_detects_my_reply():
     # test; the connector's is_sent flag must still mark my reply as outbound, so
     # the inbound is replied_by_me (not falsely open / mislabeled).
     b = FakeBackend(); ns = "t"
-    _outlook(b, ns, "o1", "Kaan Karagöz <kaan@bkm.com>", "Onay", 16)
-    b.put(b.memory, ns, "o2", {"source": "outlook", "from": "Me <me@bkm.com>",
+    _outlook(b, ns, "o1", "Dana Reed <dana@partnerco.example>", "Onay", 16)
+    b.put(b.memory, ns, "o2", {"source": "outlook", "from": "Me <me@acme.example>",
           "subject": "Re: Onay", "folder": "Gönderilmiş Öğeler", "is_sent": True,
           "received_at": "2026-06-17T09:00:00Z"})
     out = inbox_digest.collect(b, ns, **_W)
-    first = _by_from(out, "Kaan Karagöz", 16)
+    first = _by_from(out, "Dana Reed", 16)
     assert first["status"] == "replied_by_me", first
     assert first["replied"] is True
     # the is_sent row itself is outbound -> excluded from the received list
     assert not any(m["from"] == "Me" for m in out["messages"]), out["messages"]
 
 
+def test_external_reply_does_not_answer_when_internal_domains_set():
+    # With internal_domains set, a reply from ANOTHER external party does NOT
+    # close a customer email — only an own-company reply does.
+    b = FakeBackend(); ns = "t"
+    _gmail(b, ns, "g1", "Cust One <a@cust.com>", "TX", 16, subj="Talep")
+    _gmail(b, ns, "g2", "Cust Two <b@cust.com>", "TX", 17, subj="Re: Talep")
+    out = inbox_digest.collect(b, ns, internal_domains="acme.com", **_W)
+    first = _by_from(out, "Cust One", 16)
+    assert first["status"] == "open", first
+    assert first["from_internal"] is False
+
+
+def test_internal_colleague_reply_answers_customer():
+    b = FakeBackend(); ns = "t"
+    _gmail(b, ns, "g1", "Cust One <a@cust.com>", "TY", 16, subj="Soru")
+    _gmail(b, ns, "g2", "Colleague <c@acme.com>", "TY", 17, subj="Re: Soru")
+    out = inbox_digest.collect(b, ns, internal_domains="acme.com", **_W)
+    first = _by_from(out, "Cust One", 16)
+    assert first["status"] == "replied_by_colleague", first
+    assert first["by_whom"] == "Colleague"
+
+
+def test_open_external_counts_only_customers():
+    # open = a customer (external) + a colleague (internal) both unanswered;
+    # open_external counts only the customer.
+    b = FakeBackend(); ns = "t"
+    _gmail(b, ns, "g1", "Cust <a@cust.com>", "T1x", 16, subj="A")
+    _gmail(b, ns, "g2", "Colleague <c@acme.com>", "T2x", 16, subj="B")
+    out = inbox_digest.collect(b, ns, internal_domains="acme.com", **_W)
+    assert out["open"] == 2 and out["open_external"] == 1
+    assert _by_from(out, "Cust", 16)["from_internal"] is False
+    assert _by_from(out, "Colleague", 16)["from_internal"] is True
+
+
+def test_addressed_to_me_flag_and_count():
+    b = FakeBackend(); ns = "t"
+    b.put(b.memory, ns, "g1", {"source": "gmail", "from": "Cust <a@cust.com>",
+          "subject": "Direct", "labels": "INBOX", "thread_id": "TD",
+          "to": "Sam Carter | Acme <x@acme.com>",
+          "internal_date_ms": _ms(2026, 6, 16)})
+    b.put(b.memory, ns, "g2", {"source": "gmail", "from": "Cust <a@cust.com>",
+          "subject": "CCd", "labels": "INBOX", "thread_id": "TC",
+          "to": "Someone Else <y@acme.com>", "cc": "Sam Carter <x@acme.com>",
+          "internal_date_ms": _ms(2026, 6, 16)})
+    out = inbox_digest.collect(b, ns, internal_domains="acme.com",
+                               user_display="Sam Carter", **_W)
+    direct = [m for m in out["messages"] if m["subject"] == "Direct"][0]
+    ccd = [m for m in out["messages"] if m["subject"] == "CCd"][0]
+    assert direct["addressed_to_me"] is True
+    assert ccd["addressed_to_me"] is False
+    assert out["open_to_me"] == 1
+
+
 def test_off_channel_mention_in_thread_is_handled():
     # A later same-party note says it was settled on the phone (Turkish).
     b = FakeBackend(); ns = "t"
-    _gmail(b, ns, "g1", "Mehmet K <m@x.com>", "T11", 16, subj="İş")
-    _gmail(b, ns, "g2", "Mehmet K <m@x.com>", "T11", 17, subj="Re: İş",
+    _gmail(b, ns, "g1", "Lee Park <m@x.com>", "T11", 16, subj="İş")
+    _gmail(b, ns, "g2", "Lee Park <m@x.com>", "T11", 17, subj="Re: İş",
            snip="telefonda görüştük, hallettik")
     out = inbox_digest.collect(b, ns, **_W)
-    first = _by_from(out, "Mehmet K", 16)
+    first = _by_from(out, "Lee Park", 16)
     assert first["status"] == "handled_elsewhere", first
     assert first["maybe"] is True and first["via_channel"] == "off_channel"
     assert first["evidence"].get("phrase")          # the matched phrase is surfaced
@@ -345,7 +398,7 @@ def test_handling_after_window_does_not_close():
 
 
 def test_rollup_invariants_hold():
-    b = FakeBackend(); ns = "alptekin_topal"; _seed(b, ns)   # Alice replied, Bob/Carol open
+    b = FakeBackend(); ns = "sam_carter"; _seed(b, ns)   # Alice replied, Bob/Carol open
     _gmail(b, ns, "x1", "Sam Park <sam@x.com>", "TP", 16, subj="P")
     b.put(b.memory, ns, "tmp", {"source": "teams", "chat_type": "oneOnOne",
           "chat_name": "Sam Park", "chat_id": "19:sp",
@@ -380,6 +433,10 @@ if __name__ == "__main__":
     run("handoff_in_quoted_history_is_ignored", test_handoff_in_quoted_history_is_ignored)
     run("handoff_with_fresh_request_stays_open", test_handoff_with_fresh_request_stays_open)
     run("outlook_is_sent_flag_detects_my_reply", test_outlook_is_sent_flag_detects_my_reply)
+    run("external_reply_does_not_answer_when_internal_domains_set", test_external_reply_does_not_answer_when_internal_domains_set)
+    run("internal_colleague_reply_answers_customer", test_internal_colleague_reply_answers_customer)
+    run("open_external_counts_only_customers", test_open_external_counts_only_customers)
+    run("addressed_to_me_flag_and_count", test_addressed_to_me_flag_and_count)
     run("cross_channel_bare_firstname_does_not_match", test_cross_channel_bare_firstname_does_not_match)
     run("cross_channel_name_collision_abstains", test_cross_channel_name_collision_abstains)
     run("off_channel_mention_in_thread_is_handled", test_off_channel_mention_in_thread_is_handled)
