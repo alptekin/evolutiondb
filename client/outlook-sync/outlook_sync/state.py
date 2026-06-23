@@ -17,6 +17,12 @@ def _e(s: str) -> str:
 
 
 WATERMARK_KEY = "outlook_state_latest"
+# Sent items get their OWN watermark. The inbox pass advances WATERMARK_KEY to
+# the newest received mail; if the sent pass shared it, the user's older sent
+# mail would sit behind that high floor and never backfill. A separate cursor
+# lets sent backfill independently (e.g. a deep --since) while the inbox stays
+# incremental.
+SENT_WATERMARK_KEY = "outlook_sent_state_latest"
 
 
 def _parse_value(raw):
@@ -115,6 +121,25 @@ class MemoryStore:
         self._retry(lambda cur: cur.execute(
             f"MEMORY PUT INTO {self.store} VALUES "
             f"('{_e(self.namespace)}','{_e(WATERMARK_KEY)}','{_e(value)}')"))
+
+    def get_sent_watermark_iso(self) -> Optional[str]:
+        def run(cur):
+            cur.execute(
+                f"SELECT mem_value FROM __mem_{self.store} "
+                f"WHERE mem_namespace = '{_e(self.namespace)}' "
+                f"AND mem_key = '{_e(SENT_WATERMARK_KEY)}'")
+            rows = cur.fetchall()
+            if not rows:
+                return None
+            v = _parse_value(rows[0][0]).get("received_at")
+            return str(v) if v else None
+        return self._retry(run)
+
+    def set_sent_watermark_iso(self, iso: str) -> None:
+        value = json.dumps({"received_at": iso, "saved_at": time.time()})
+        self._retry(lambda cur: cur.execute(
+            f"MEMORY PUT INTO {self.store} VALUES "
+            f"('{_e(self.namespace)}','{_e(SENT_WATERMARK_KEY)}','{_e(value)}')"))
 
     # ---------------------------------------------------------------- #
     #  Records                                                          #

@@ -86,12 +86,15 @@ def _strip_quote(text: str) -> str:
 
 
 def _outbound(d) -> bool:
-    """Did the USER send this message? (gmail SENT label / outlook sent folder.)"""
+    """Did the USER send this message? gmail = SENT label; outlook = the
+    connector's language-independent `is_sent` flag, with `"sent" in folder` as
+    a fallback for older rows / English mailboxes (the Turkish sent folder is
+    'Gönderilmiş Öğeler', which the folder test alone would miss)."""
     src = d.get("source")
     if src == "gmail":
         return "SENT" in str(d.get("labels") or "")
     if src == "outlook":
-        return "sent" in str(d.get("folder") or "").lower()
+        return bool(d.get("is_sent")) or "sent" in str(d.get("folder") or "").lower()
     return False
 
 

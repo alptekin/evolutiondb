@@ -280,6 +280,23 @@ def test_outlook_real_reply_prefix_counts_as_colleague():
     assert first["maybe"] is True
 
 
+def test_outlook_is_sent_flag_detects_my_reply():
+    # The Turkish sent folder ('Gönderilmiş Öğeler') defeats a "sent in folder"
+    # test; the connector's is_sent flag must still mark my reply as outbound, so
+    # the inbound is replied_by_me (not falsely open / mislabeled).
+    b = FakeBackend(); ns = "t"
+    _outlook(b, ns, "o1", "Kaan Karagöz <kaan@bkm.com>", "Onay", 16)
+    b.put(b.memory, ns, "o2", {"source": "outlook", "from": "Me <me@bkm.com>",
+          "subject": "Re: Onay", "folder": "Gönderilmiş Öğeler", "is_sent": True,
+          "received_at": "2026-06-17T09:00:00Z"})
+    out = inbox_digest.collect(b, ns, **_W)
+    first = _by_from(out, "Kaan Karagöz", 16)
+    assert first["status"] == "replied_by_me", first
+    assert first["replied"] is True
+    # the is_sent row itself is outbound -> excluded from the received list
+    assert not any(m["from"] == "Me" for m in out["messages"]), out["messages"]
+
+
 def test_off_channel_mention_in_thread_is_handled():
     # A later same-party note says it was settled on the phone (Turkish).
     b = FakeBackend(); ns = "t"
@@ -362,6 +379,7 @@ if __name__ == "__main__":
     run("forward_is_not_a_colleague", test_forward_is_not_a_colleague)
     run("handoff_in_quoted_history_is_ignored", test_handoff_in_quoted_history_is_ignored)
     run("handoff_with_fresh_request_stays_open", test_handoff_with_fresh_request_stays_open)
+    run("outlook_is_sent_flag_detects_my_reply", test_outlook_is_sent_flag_detects_my_reply)
     run("cross_channel_bare_firstname_does_not_match", test_cross_channel_bare_firstname_does_not_match)
     run("cross_channel_name_collision_abstains", test_cross_channel_name_collision_abstains)
     run("off_channel_mention_in_thread_is_handled", test_off_channel_mention_in_thread_is_handled)

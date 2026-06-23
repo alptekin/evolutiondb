@@ -656,7 +656,8 @@ def job_open_loops(backend, ns: str) -> int:
                 subj = d.get("subject") or ""
                 text = d.get("snippet") or ""
             else:  # outlook
-                out = "sent" in (d.get("folder") or "").lower()
+                out = bool(d.get("is_sent")) or \
+                    "sent" in (d.get("folder") or "").lower()
                 who = _disp(d.get("from"))
                 subj = d.get("subject") or ""
                 text = d.get("snippet") or ""
