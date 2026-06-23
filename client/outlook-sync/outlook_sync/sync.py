@@ -322,15 +322,21 @@ def sync_once(cfg: Config, *,
     wm = (store.get_watermark_iso() if store else None)
     floor = wm or since_iso
     highest = floor or ""
+    # Sent items track their OWN cursor so they backfill independently of the
+    # (typically much higher) inbox watermark — see state.SENT_WATERMARK_KEY.
+    sent_wm = (store.get_sent_watermark_iso() if store else None)
+    sent_floor = sent_wm or since_iso
+    highest_sent = sent_floor or ""
 
     counters = {"messages": 0, "skipped": 0, "errors": 0}
     seen_ids: set = set()
 
-    def _ingest(msg: Dict) -> None:
+    def _ingest(msg: Dict, is_sent: bool = False) -> None:
         """Common per-message handler. Used by both the cross-folder
         pass and the explicit SentItems pass; in-process `seen_ids`
         deduplicates so a message that surfaces from both passes only
-        writes one row."""
+        writes one row. `is_sent` marks rows the user SENT so downstream
+        reply-detection works regardless of the (localized) folder name."""
         msg_id = msg.get("id")
         if not msg_id:
             counters["errors"] += 1
@@ -346,6 +352,12 @@ def sync_once(cfg: Config, *,
         if not rec:
             counters["skipped"] += 1
             return
+        # Language-independent outbound marker. The Sent Items folder name is
+        # localized ("Gönderilmiş Öğeler", "Éléments envoyés", …), so a
+        # `"sent" in folder` test misses it; this pass knows the message is the
+        # user's, so it flags it explicitly. Set before _protect (not a PII field).
+        if is_sent:
+            rec["is_sent"] = True
         main_key = f"outlook_msg_{msg_id}"
         rec, companions = _protect(rec, main_key)
         if store:
@@ -362,8 +374,11 @@ def sync_once(cfg: Config, *,
                 counters["errors"] += 1
                 return
         counters["messages"] += 1
-        nonlocal highest
-        if rec["received_at"] > highest:
+        nonlocal highest, highest_sent
+        if is_sent:
+            if rec["received_at"] > highest_sent:
+                highest_sent = rec["received_at"]
+        elif rec["received_at"] > highest:
             highest = rec["received_at"]
 
     # Pass 1 — cross-folder /me/messages. Picks up inbox, junk, drafts,
@@ -380,8 +395,8 @@ def sync_once(cfg: Config, *,
     # --folder; the explicit filter takes precedence.
     if folder_filter_id is None:
         try:
-            for msg in client.list_sent_messages(received_after_iso=floor):
-                _ingest(msg)
+            for msg in client.list_sent_messages(received_after_iso=sent_floor):
+                _ingest(msg, is_sent=True)
         except api_mod.GraphError as exc:
             print(f"[outlook-sync] SentItems pass failed: {exc}",
                   file=sys.stderr, flush=True)
@@ -409,6 +424,8 @@ def sync_once(cfg: Config, *,
 
     if store and highest and highest != (wm or ""):
         store.set_watermark_iso(highest)
+    if store and highest_sent and highest_sent != (sent_wm or ""):
+        store.set_sent_watermark_iso(highest_sent)
     return counters
 
 
