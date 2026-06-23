@@ -152,7 +152,18 @@ def _thread_key(d, source):
         return d.get("channel_id")
     if source == "imessage":
         return d.get("chat_id") or d.get("handle")
-    subj = re.sub(r'(?i)^\s*(re|fwd|fw)\s*:\s*', '', d.get("subject") or "").strip()
+    # Strip reply/forward prefixes — English AND Turkish (Yanıt:/Yn:/İlt:/
+    # İletilen:) — repeatedly, so 'Re: Yanıt: X' and any depth collapse to the
+    # bare subject and a Turkish Outlook reply-all still links to its parent.
+    subj = d.get("subject") or ""
+    while True:
+        stripped = re.sub(
+            r'(?i)^\s*(re|fwd?|fw|yn|yan(?:ıt)?|ilt|ilet(?:ilen)?)\s*:\s*',
+            '', subj)
+        if stripped == subj:
+            break
+        subj = stripped
+    subj = subj.strip()
     return subj or d.get("message_id")
 
 
