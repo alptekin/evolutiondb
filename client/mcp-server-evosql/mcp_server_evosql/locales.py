@@ -114,12 +114,28 @@ class Heuristics:
         h = lambda k: _merge_lists(k, codes)            # noqa: E731
 
         def _alt(items, flags=re.I):
-            return re.compile("|".join(items), flags) if items else _NEVER
+            # A malformed phrase in a locale JSON must disable only THAT category,
+            # not raise re.error and take down every heuristics() caller. Mirror
+            # the existing id_patterns guard: fall back to _NEVER on a bad pattern.
+            if not items:
+                return _NEVER
+            try:
+                return re.compile("|".join(items), flags)
+            except re.error:
+                return _NEVER
 
         self.question = _alt(h("question"))
         self.promise = _alt(h("promise"))
         self.close = _alt(h("close"))
         self.auto_from = _alt(h("auto_from"))
+        # handoff = a later message saying the matter moved to / was settled on a
+        # live channel (call / phone / Zoom / Teams / WhatsApp / in person).
+        # handoff_veto = the same message instead asks / makes a fresh request /
+        # says it is still outstanding, so it is NOT a past resolution.
+        # Absent in older locale files -> _alt() returns _NEVER, so these signals
+        # are a silent no-op there rather than an error.
+        self.handoff = _alt(h("handoff"))
+        self.handoff_veto = _alt(h("handoff_veto"))
 
         # content-word tokenization + filtering (profile / gist). \w is already
         # Unicode-aware, so no per-language letter class is needed; only the

@@ -72,9 +72,31 @@
       "🙌",
       "✅"
     ],
+    "handoff": [
+      "over the phone",
+      "as discussed (on|in) (the )?(call|meeting|phone)",
+      "(jumped|hopped|got) on (a|the) (call|zoom)",
+      "we (just )?spoke",
+      "spoke (earlier|on the phone|just now)",
+      "talked (it|this) (over|through)",
+      "talked (in person|offline)",
+      "sorted (it|this) (out )?(on|over) (the )?(phone|call|whatsapp|zoom|teams)",
+      "handled (this|it) (on|over) (whatsapp|zoom|teams|the call|the phone)",
+      "covered (this|it) (on|in) (the )?(call|meeting)",
+      "discussed (this|it) (on|in) (the )?(call|meeting|phone)"
+    ],
+    "handoff_veto": [
+      "please (send|share|review|sign|confirm|provide|forward|advise|complete|update|reply|respond|return|let me know|get back|check|approve)",
+      "could you", "can you", "would you", "kindly",
+      "still (waiting|pending|outstanding|need)",
+      "have(n'?t| not)( yet)? (received|heard)",
+      "any update", "gentle reminder", "as a reminder",
+      "await(ing)? your", "follow(ing)? up on"
+    ],
     "auto_from": [
       "noreply",
       "no-reply",
+      "do-not-reply",
       "donotreply",
       "notification",
       "mailer",
@@ -82,7 +104,16 @@
       "bounce",
       "support@",
       "info@",
-      "news@"
+      "news@",
+      "billing@",
+      "accounts@",
+      "accounting@",
+      "statements@",
+      "invoice@",
+      "invoices@",
+      "orders@",
+      "automated@",
+      "system@"
     ],
     "honorific_pre": [
       "Dr",
