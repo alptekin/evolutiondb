@@ -94,9 +94,45 @@
       "tamam abi",
       "ok abi"
     ],
+    "handoff": [
+      "telefonda (görüş|konuş|hallet|anlat|karar)",
+      "telefonla (görüş|konuş|hallet)",
+      "arayıp (konuş|hallet|anlat)",
+      "zoom'?da (görüş|konuş|hallet)",
+      "teams'?te (görüş|konuş|hallet)",
+      "toplantıda (görüş|konuş|karar|hallet)",
+      "görüşmemizde (konuş|karar|belirt)",
+      "yüz yüze (görüş|konuş|hallet)",
+      "bizzat (görüş|konuş|hallet)",
+      "whatsapp'?tan (yaz|konuş|hallet)",
+      "sözlü olarak (görüş|konuş|ilet)"
+    ],
+    "handoff_veto": [
+      "lütfen",
+      "rica ed",
+      "hâlâ bekl",
+      "hala bekl",
+      "henüz (almadım|gelmedi|ulaşmadı|yok|cevap)",
+      "bekliyoru[mz]",
+      "hatırlat",
+      "teyit",
+      "onay bekl",
+      "geri dön(üş|er|melisin)",
+      "iletir mis",
+      "gönderir mis",
+      "paylaşır mıs"
+    ],
     "auto_from": [
       "bülten",
-      "destek@"
+      "destek@",
+      "noreply",
+      "no-reply",
+      "donotreply",
+      "bilgi@",
+      "fatura@",
+      "muhasebe@",
+      "otomatik@",
+      "sistem@"
     ],
     "honorific_pre": [
       "Doç",
