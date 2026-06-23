@@ -2894,7 +2894,18 @@ TOOLS = [
             "handled (confirm)' rather than fully done. Top-level counts: total, "
             "open, handled, maybe_handled (= count of maybe), and replied (= ONLY "
             "replied_by_me, unchanged legacy meaning); by_status is the per-status "
-            "rollup."
+            "rollup.\n"
+            "Company-aware (when EVOSQL_INTERNAL_DOMAINS is set or auto-derived "
+            "from the user's own sent domain): a colleague reply only counts as "
+            "answered when it comes from an INTERNAL domain, so a CUSTOMER email is "
+            "'open' until someone at the user's company replies (not just the user). "
+            "Per message: from_internal (sender is own-company), automated (a "
+            "bot/newsletter sender), addressed_to_me (user is in To, not just CC). "
+            "Top-level open_external = the real 'a customer is waiting, nobody at "
+            "the company replied' count (external + not automated + open); "
+            "open_to_me = open mail addressed TO the user. For a 'who/what is "
+            "waiting on us' view, use open_external and the messages with "
+            "status=='open' and from_internal==false."
         ),
         "inputSchema": {"type": "object", "properties": {
             "since": {"type": "string", "default": "last_week"},

@@ -33,6 +33,7 @@ old meaning and formula (set only by replied_by_me).
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -111,6 +112,21 @@ def _addr(raw) -> str:
     return ""
 
 
+def _domain(raw) -> str:
+    """Lowercased email domain from a 'Name <local@domain>' / bare-address field
+    ('' if none). Survives PII masking, which masks the local-part but keeps the
+    domain intact ('Name <***@acme.com>')."""
+    a = _addr(raw)
+    return a.split("@", 1)[1] if "@" in a else ""
+
+
+# Consumer freemail domains never count as a company's "internal" domain when we
+# auto-derive it from the user's own outbound mail (a personal gmail address is
+# not a colleague signal). An explicit EVOSQL_INTERNAL_DOMAINS overrides this.
+_FREEMAIL = {"gmail.com", "googlemail.com", "outlook.com", "hotmail.com",
+             "live.com", "yahoo.com", "icloud.com", "me.com", "proton.me"}
+
+
 def _email_text(d) -> str:
     """NEW body text scanned for an off-channel mention, with quoted reply history
     stripped. gmail -> snippet; outlook -> snippet + body (Graph gives full body)."""
@@ -185,18 +201,29 @@ def resolve_range(since, until=None, *, now: datetime = None):
 def _empty(ok, label, since, until, error=None):
     out = {"ok": ok, "range": label, "since": since, "until": until,
            "total": 0, "replied": 0, "unreplied": 0, "handled": 0, "open": 0,
-           "maybe_handled": 0, "by_status": {}, "messages": [], "by_sender": []}
+           "maybe_handled": 0, "open_external": 0, "open_to_me": 0,
+           "internal_domains": [], "by_status": {}, "messages": [], "by_sender": []}
     if error is not None:
         out["error"] = error
     return out
 
 
 def collect(backend, ns, *, since="last_week", until=None,
-            sources=EMAIL_SOURCES, now: datetime = None) -> dict:
+            sources=EMAIL_SOURCES, now: datetime = None,
+            internal_domains=None, user_display=None,
+            noise_domains=None) -> dict:
     """Window the primary store's email rows to [since, until) and classify each
     RECEIVED one as replied_by_me / replied_by_colleague / handled_elsewhere /
     open, with structured evidence + per-sender totals. ``ok`` False only on a
-    hard backend error; an empty inbox returns ok=True with total 0."""
+    hard backend error; an empty inbox returns ok=True with total 0.
+
+    ``internal_domains`` makes "answered" company-aware: when set (or via
+    EVOSQL_INTERNAL_DOMAINS, or auto-derived from the user's own outbound
+    domain), a colleague reply only counts when it comes from one of these
+    domains — i.e. someone at the user's company answered, which is what closes a
+    CUSTOMER email even if the user personally didn't. ``user_display`` (or
+    EVOSQL_USER_DISPLAY, or the synced self_profile) flags mail addressed TO the
+    user (in the To field) vs only CC'd."""
     from .server import _e
     from . import locales
     start, end, label = resolve_range(since, until, now=now)
@@ -216,6 +243,50 @@ def collect(backend, ns, *, since="last_week", until=None,
 
     emails = [d for d in rows if d.get("source") in sources]
 
+    # --- "internal" (own-company) domains -----------------------------------
+    # Explicit arg > EVOSQL_INTERNAL_DOMAINS env > auto-derived from the domains
+    # the user themselves SENDS from (outbound mail), minus consumer freemail.
+    # Empty -> a colleague reply is any different human (generic behaviour).
+    raw_id = (internal_domains if internal_domains is not None
+              else os.environ.get("EVOSQL_INTERNAL_DOMAINS", ""))
+    if isinstance(raw_id, str):
+        idoms = {x.strip().lower() for x in raw_id.split(",") if x.strip()}
+    else:
+        idoms = {str(x).strip().lower() for x in (raw_id or []) if str(x).strip()}
+    if not idoms:
+        idoms = {dm for dm in (_domain(d.get("from")) for d in emails if _outbound(d))
+                 if dm and dm not in _FREEMAIL}
+
+    # --- user's display name for the "addressed to me" (To vs CC) flag -------
+    udisp = user_display or os.environ.get("EVOSQL_USER_DISPLAY") or ""
+    if not udisp:
+        try:
+            for row in backend._query(
+                    f"SELECT mem_value FROM __mem_{backend.memory} WHERE "
+                    f"mem_namespace = '{_e(ns)}' AND mem_key LIKE '%self_profile%' "
+                    f"LIMIT 1") or []:
+                udisp = json.loads(row[0]).get("display_name") or ""
+        except Exception:
+            udisp = ""
+    udispn = _fold(udisp.split("|")[0]) if udisp else ""   # drop a " | Org" suffix
+
+    # --- noise domains (operator config; NO brand names in source) -----------
+    # Notification/newsletter sender domains the operator wants treated as
+    # automated (e.g. a PR/chat notification service, an HR mailer). Brand-
+    # specific values live in EVOSQL_NOISE_DOMAINS, never hardcoded here.
+    raw_nd = (noise_domains if noise_domains is not None
+              else os.environ.get("EVOSQL_NOISE_DOMAINS", ""))
+    if isinstance(raw_nd, str):
+        ndoms = {x.strip().lower() for x in raw_nd.split(",") if x.strip()}
+    else:
+        ndoms = {str(x).strip().lower() for x in (raw_nd or []) if str(x).strip()}
+
+    def _automated(d):
+        dm = _domain(d.get("from"))
+        return (_is_auto(d) or is_nonhuman_sender(_disp(d.get("from")))
+                or (bool(ndoms) and (dm in ndoms
+                    or any(dm.endswith("." + nd) or dm == nd for nd in ndoms))))
+
     # --- email thread index: (source, thread_key) -> [msg-info] sorted by ts --
     # Each entry knows WHO sent it (disp/addr), whether it was outbound (mine),
     # its text (for off-channel mention scan), and whether it is automated — so
@@ -227,6 +298,7 @@ def collect(backend, ns, *, since="last_week", until=None,
         threads.setdefault((src, _thread_key(d, src)), []).append({
             "ts": _ts(d), "out": _outbound(d), "disp": disp,
             "dispn": _fold(disp), "addr": _addr(d.get("from")),
+            "internal": _outbound(d) or (_domain(d.get("from")) in idoms),
             "text": _email_text(d), "auto": _is_auto(d),
             "reply_subj": _is_reply_subject(d.get("subject")),
         })
@@ -316,6 +388,9 @@ def collect(backend, ns, *, since="last_week", until=None,
             if (same or is_nonhuman_sender(m["disp"])
                     or H.question.search(m["text"] or "")):
                 continue
+            if idoms and not m["internal"]:
+                continue          # only an OWN-COMPANY reply answers a customer;
+                                  # another external party writing does not.
             at = _day(m["ts"])
             note = f"{m['disp']} replied in-thread {at}"
             if src == "outlook":
@@ -398,6 +473,10 @@ def collect(backend, ns, *, since="last_week", until=None,
             "via_channel": ev.get("channel"),
             "evidence": ev,
             "source": d.get("source"),
+            # company / addressee facets (meaningful when internal_domains known):
+            "from_internal": _domain(d.get("from")) in idoms,
+            "automated": _automated(d),
+            "addressed_to_me": bool(udispn) and udispn in _fold(d.get("to") or ""),
             "_ts": ts,
         })
     msgs.sort(key=lambda m: m["_ts"])
@@ -425,6 +504,14 @@ def collect(backend, ns, *, since="last_week", until=None,
         "handled": sum(1 for m in msgs if m["handled"]),
         "open": sum(1 for m in msgs if m["status"] == "open"),
         "maybe_handled": sum(1 for m in msgs if m["maybe"]),
+        # open_external = the real "customer is waiting, nobody at the company has
+        # replied" list (external human sender, still open). open_to_me = open mail
+        # addressed TO the user (vs only CC'd).
+        "open_external": sum(1 for m in msgs if m["status"] == "open"
+                             and not m["from_internal"] and not m["automated"]),
+        "open_to_me": sum(1 for m in msgs if m["status"] == "open"
+                          and m["addressed_to_me"]),
+        "internal_domains": sorted(idoms),
         "by_status": dict(Counter(m["status"] for m in msgs)),
         "messages": msgs,
         "by_sender": by_sender,
