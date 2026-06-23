@@ -21,7 +21,7 @@ jobs:
       - name: Read version from version.h
         id: version
         run: |
-          VERSION=$(grep 'EVODB_VERSION ' evolution/db/version.h | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          VERSION=$(grep 'EVODB_VERSION ' src/include/version.h | head -1 | sed 's/.*"\(.*\)".*/\1/')
           if [ -z "$VERSION" ]; then
             echo "ERROR: Could not read version from version.h"
             exit 1
@@ -34,7 +34,7 @@ jobs:
         run: |
           if git rev-parse "${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
             echo "ERROR: Tag ${{ steps.version.outputs.version }} already exists!"
-            echo "Bump version in evolution/db/version.h before releasing."
+            echo "Bump version in src/include/version.h before releasing."
             exit 1
           fi
 

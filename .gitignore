@@ -88,3 +88,13 @@ wal.*
 *.wal
 *.db
 *.archive
+# repo-split: relocated build outputs
+src/backend/evosql
+src/backend/evosql.exe
+src/server/evosql-server
+src/server/evosql-server.exe
+src/bin/tools/catdiag
+src/bin/tools/catrepair
+src/bin/tools/rowdiag
+src/bin/tools/cattorture
+src/bin/tools/bt2compact_test

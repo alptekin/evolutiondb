@@ -93,14 +93,14 @@ jobs:
       # ----- Build the installer ------------------------------------
       - name: Build .pkg and .dmg
         run: |
-          ./client/macos-installer/build.sh \
+          ./packaging/macos/build.sh \
               /tmp/dl/evosql-server-macos-arm64 \
               "${{ steps.tag.outputs.version }}"
-          ls -lh client/macos-installer/out
+          ls -lh packaging/macos/out
 
       - name: Produce sha256 manifests
         run: |
-          cd client/macos-installer/out
+          cd packaging/macos/out
           for f in *.pkg *.dmg; do
             shasum -a 256 "$f" > "$f.sha256"
           done
@@ -111,7 +111,7 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           files: |
-            client/macos-installer/out/*.pkg
-            client/macos-installer/out/*.dmg
-            client/macos-installer/out/*.sha256
+            packaging/macos/out/*.pkg
+            packaging/macos/out/*.dmg
+            packaging/macos/out/*.sha256
           fail_on_unmatched_files: true

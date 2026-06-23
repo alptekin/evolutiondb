@@ -4,8 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - "deploy/helm/**"
-      - "evolution/db/version.h"
+      - "infra/helm/**"
+      - "src/include/version.h"
   workflow_dispatch:
 
 permissions:
@@ -24,16 +24,16 @@ jobs:
       - name: Read version from version.h
         id: version
         run: |
-          VERSION=$(grep 'EVODB_VERSION ' evolution/db/version.h | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          VERSION=$(grep 'EVODB_VERSION ' src/include/version.h | head -1 | sed 's/.*"\(.*\)".*/\1/')
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "App version: ${VERSION}"
 
       - name: Sync Chart.yaml version
         run: |
-          sed -i "s/^version:.*/version: ${{ steps.version.outputs.version }}/" deploy/helm/evolutiondb/Chart.yaml
-          sed -i "s/^appVersion:.*/appVersion: \"${{ steps.version.outputs.version }}\"/" deploy/helm/evolutiondb/Chart.yaml
+          sed -i "s/^version:.*/version: ${{ steps.version.outputs.version }}/" infra/helm/evolutiondb/Chart.yaml
+          sed -i "s/^appVersion:.*/appVersion: \"${{ steps.version.outputs.version }}\"/" infra/helm/evolutiondb/Chart.yaml
           echo "Chart.yaml updated:"
-          grep -E "^(version|appVersion)" deploy/helm/evolutiondb/Chart.yaml
+          grep -E "^(version|appVersion)" infra/helm/evolutiondb/Chart.yaml
 
       - name: Install Helm
         uses: azure/setup-helm@v4
@@ -41,7 +41,7 @@ jobs:
       - name: Package chart
         run: |
           mkdir -p .helm-repo
-          helm package deploy/helm/evolutiondb -d .helm-repo
+          helm package infra/helm/evolutiondb -d .helm-repo
 
       - name: Checkout gh-pages
         run: |

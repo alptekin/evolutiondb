@@ -94,7 +94,7 @@ jobs:
       - name: Build .exe installer
         if: steps.check.outputs.binary_present == 'true'
         run: |
-          cd client/windows-installer
+          cd packaging/windows
           makensis -V2 \
               -DVERSION="${{ steps.tag.outputs.version }}" \
               -DSRC_BINARY=/tmp/dl/evosql-server-windows-x86_64.exe \
@@ -104,7 +104,7 @@ jobs:
       - name: sha256 manifest
         if: steps.check.outputs.binary_present == 'true'
         run: |
-          cd client/windows-installer
+          cd packaging/windows
           for f in EvolutionDB-*.exe; do
             shasum -a 256 "$f" > "$f.sha256"
           done
@@ -115,6 +115,6 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           files: |
-            client/windows-installer/EvolutionDB-*.exe
-            client/windows-installer/*.sha256
+            packaging/windows/EvolutionDB-*.exe
+            packaging/windows/*.sha256
           fail_on_unmatched_files: true
