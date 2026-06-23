@@ -22,12 +22,12 @@ jobs:
       - name: Generate version tag
         id: version
         run: |
-          # Read MAJOR.MINOR from evolution/db/version.h so tag format
+          # Read MAJOR.MINOR from src/include/version.h so tag format
           # tracks the source-of-truth version constant.
-          MAJOR=$(grep -E '^#define EVODB_VERSION_MAJOR' evolution/db/version.h | awk '{print $3}')
-          MINOR=$(grep -E '^#define EVODB_VERSION_MINOR' evolution/db/version.h | awk '{print $3}')
+          MAJOR=$(grep -E '^#define EVODB_VERSION_MAJOR' src/include/version.h | awk '{print $3}')
+          MINOR=$(grep -E '^#define EVODB_VERSION_MINOR' src/include/version.h | awk '{print $3}')
           if [ -z "$MAJOR" ] || [ -z "$MINOR" ]; then
-            echo "Failed to parse EVODB_VERSION_{MAJOR,MINOR} from evolution/db/version.h"
+            echo "Failed to parse EVODB_VERSION_{MAJOR,MINOR} from src/include/version.h"
             exit 1
           fi
 

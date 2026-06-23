@@ -106,23 +106,23 @@ jobs:
 
       - name: Build .deb + .rpm + .AppImage
         run: |
-          chmod +x client/linux-installer/build.sh \
-                   client/linux-installer/debian/DEBIAN/postinst \
-                   client/linux-installer/debian/DEBIAN/prerm \
-                   client/linux-installer/debian/DEBIAN/postrm \
-                   client/linux-installer/appimage/AppRun
+          chmod +x packaging/linux/build.sh \
+                   packaging/linux/debian/DEBIAN/postinst \
+                   packaging/linux/debian/DEBIAN/prerm \
+                   packaging/linux/debian/DEBIAN/postrm \
+                   packaging/linux/appimage/AppRun
           # AppImage tooling refuses to run inside a Docker/Action
           # sandbox unless the runtime can be extracted in place.
           export APPIMAGE_EXTRACT_AND_RUN=1
-          ./client/linux-installer/build.sh \
+          ./packaging/linux/build.sh \
               /tmp/dl/${{ matrix.target.asset_in }} \
               "${{ steps.tag.outputs.version }}" \
               "${{ matrix.target.deb_arch }}"
-          ls -lh client/linux-installer/out
+          ls -lh packaging/linux/out
 
       - name: sha256 manifests
         run: |
-          cd client/linux-installer/out
+          cd packaging/linux/out
           for f in *.deb *.rpm *.AppImage; do
             [ -e "$f" ] || continue
             shasum -a 256 "$f" > "$f.sha256"
@@ -134,8 +134,8 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           files: |
-            client/linux-installer/out/*.deb
-            client/linux-installer/out/*.rpm
-            client/linux-installer/out/*.AppImage
-            client/linux-installer/out/*.sha256
+            packaging/linux/out/*.deb
+            packaging/linux/out/*.rpm
+            packaging/linux/out/*.AppImage
+            packaging/linux/out/*.sha256
           fail_on_unmatched_files: false

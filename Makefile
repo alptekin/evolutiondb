@@ -1,97 +1,68 @@
-# EvoSQL — Top-Level Build
-# Builds all components: Evolution CLI, Adaptor Server, CLI Client
+# EvolutionDB — Top-Level Build
 #
 # Usage:
-#   make              Build all three executables
-#   make evolution    Build only evosql (CLI)
-#   make adaptor      Build only evosql-server
-#   make cli          Build only evosql-cli
-#   make release      Build all + copy stripped binaries to release/
-#   make clean        Clean all object files and executables
-#   make generate     Regenerate parser/lexer from .y/.l files
+#   make            Build the engine (evosql) and the server (evosql-server)
+#   make engine     Build only src/backend/evosql (standalone engine REPL)
+#   make server     Build only src/server/evosql-server
+#   make tools      Build the diagnostic tools in src/bin/tools
+#   make release    Build + copy stripped binaries to release/
+#   make clean      Clean all object files and executables
+#   make generate   Regenerate parser/lexer from .y/.l files
 
-# Platform detection
 UNAME := $(shell uname -s 2>/dev/null || echo Windows)
-
 ifeq ($(UNAME),Linux)
     EXE_SUFFIX =
 else
-    # Fix linker temp-file permission issue on Windows
     export TEMP = /tmp
     export TMP  = /tmp
     EXE_SUFFIX = .exe
 endif
 
-# Sub-project directories
-EVO_DIR    = evolution
-ADAPTOR_DIR = adaptor
-CLI_DIR     = cli
-
-# Output executables (for release copy)
-EVO_EXE     = $(EVO_DIR)/evosql$(EXE_SUFFIX)
-ADAPTOR_EXE = $(ADAPTOR_DIR)/evosql-server$(EXE_SUFFIX)
-CLI_EXE     = $(CLI_DIR)/evosql-cli$(EXE_SUFFIX)
-
+BACKEND_DIR = src/backend
+SERVER_DIR  = src/server
+TOOLS_DIR   = src/bin/tools
 RELEASE_DIR = release
 
-# ----------------------------------------------------------------
-#  Default: build all
-# ----------------------------------------------------------------
-all: evolution adaptor cli
+ENGINE_EXE = $(BACKEND_DIR)/evosql$(EXE_SUFFIX)
+SERVER_EXE = $(SERVER_DIR)/evosql-server$(EXE_SUFFIX)
+
+all: engine server
 	@echo "===================================="
 	@echo "  Build complete!"
-	@echo "    $(EVO_EXE)"
-	@echo "    $(ADAPTOR_EXE)"
-	@echo "    $(CLI_EXE)"
+	@echo "    $(ENGINE_EXE)"
+	@echo "    $(SERVER_EXE)"
 	@echo "===================================="
 
-# ----------------------------------------------------------------
-#  Individual targets (order matters: evolution first)
-# ----------------------------------------------------------------
-evolution:
-	$(MAKE) -C $(EVO_DIR)
+# order matters: the server links backend objects, so build the engine first
+engine:
+	$(MAKE) -C $(BACKEND_DIR)
 
-adaptor:
-	$(MAKE) -C $(ADAPTOR_DIR) TLS=$(TLS)
+server: engine
+	$(MAKE) -C $(SERVER_DIR) TLS=$(TLS)
 
-cli:
-	$(MAKE) -C $(CLI_DIR)
+tools: engine
+	$(MAKE) -C $(TOOLS_DIR)
 
-# ----------------------------------------------------------------
-#  Release: build all + copy stripped binaries
-# ----------------------------------------------------------------
+# Back-compat aliases for callers that still say `make evolution` / `make adaptor`
+evolution: engine
+adaptor: server
+
 release: all
 	@mkdir -p $(RELEASE_DIR)
-	cp $(EVO_EXE)     $(RELEASE_DIR)/evosql$(EXE_SUFFIX)
-	cp $(ADAPTOR_EXE) $(RELEASE_DIR)/evosql-server$(EXE_SUFFIX)
-	cp $(CLI_EXE)     $(RELEASE_DIR)/evosql-cli$(EXE_SUFFIX)
+	cp $(ENGINE_EXE) $(RELEASE_DIR)/evosql$(EXE_SUFFIX)
+	cp $(SERVER_EXE) $(RELEASE_DIR)/evosql-server$(EXE_SUFFIX)
 ifeq ($(UNAME),Linux)
-	strip $(RELEASE_DIR)/evosql
-	strip $(RELEASE_DIR)/evosql-server
-	strip $(RELEASE_DIR)/evosql-cli
-else
-	strip $(RELEASE_DIR)/evosql.exe
-	strip $(RELEASE_DIR)/evosql-server.exe
-	strip $(RELEASE_DIR)/evosql-cli.exe
+	strip $(RELEASE_DIR)/evosql $(RELEASE_DIR)/evosql-server
 endif
-	@echo "===================================="
-	@echo "  Release binaries in $(RELEASE_DIR)/"
 	@ls -lh $(RELEASE_DIR)/*
-	@echo "===================================="
 
-# ----------------------------------------------------------------
-#  Clean everything
-# ----------------------------------------------------------------
 clean:
-	$(MAKE) -C $(EVO_DIR) clean
-	$(MAKE) -C $(ADAPTOR_DIR) clean
-	$(MAKE) -C $(CLI_DIR) clean
+	$(MAKE) -C $(BACKEND_DIR) clean
+	$(MAKE) -C $(SERVER_DIR) clean
+	-$(MAKE) -C $(TOOLS_DIR) clean
 	rm -rf $(RELEASE_DIR)
 
-# ----------------------------------------------------------------
-#  Regenerate parser/lexer from .y/.l source files
-# ----------------------------------------------------------------
 generate:
-	$(MAKE) -C $(EVO_DIR) generate
+	$(MAKE) -C $(BACKEND_DIR) generate
 
-.PHONY: all evolution adaptor cli release clean generate
+.PHONY: all engine server tools evolution adaptor release clean generate
