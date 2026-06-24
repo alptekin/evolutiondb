@@ -1,257 +1,105 @@
-# EvolutionDB — Powering Long-Term Memory for Agents
+# EvolutionDB
 
-A single-process database that gives AI agent frameworks everything
-they need from one binary: **SQL + vector search + JSON + temporal
-queries + reactive push streaming** with first-class adapters for
-**LangGraph, LangChain, LlamaIndex, CrewAI, AutoGen, and Mem0**.
+EvolutionDB is a small SQL database engine written in C. It runs as a single process. It speaks the PostgreSQL wire protocol, so clients like psql, DBeaver, and JDBC drivers can connect to it without any changes.
 
-> _Replace the MongoDB + Pinecone dual-stack — and the polling loops
-> that go with it — with a single Postgres-compatible server you run
-> locally or on-prem._
+The engine also has features that AI agent systems often need. It can store vectors and search them by similarity. It can store JSON documents. It can keep time-versioned history. It can push change events to clients so they do not have to poll.
 
-[![Framework Compat](https://github.com/alptekin/evolutiondb/actions/workflows/framework-compat.yml/badge.svg)](https://github.com/alptekin/evolutiondb/actions/workflows/framework-compat.yml)
-[![CodeQL](https://github.com/alptekin/evolutiondb/actions/workflows/codeql.yml/badge.svg)](https://github.com/alptekin/evolutiondb/actions/workflows/codeql.yml)
+This repository holds the engine only. The AI agent, the memory server, the connectors, and the language SDKs live in a separate repository called [evolutionagent](https://github.com/alptekin/evolutionagent).
 
-## Why EvolutionDB for agent memory
+## What you get
 
-| Need | What we give you |
-|------|------------------|
-| LangGraph-compatible checkpoint store | `CHECKPOINT STORE` DDL/DML + `EvoCheckpointSaver` |
-| Cross-thread memory with vector search | `MEMORY STORE … WITH (embedding_dim=N)` + HNSW index |
-| Append-only chat history | `MESSAGE LOG` + `EvoChatMessageHistory` |
-| Mongo-style document store w/ filter DSL | `DOCUMENT STORE` + `$and / $or / $eq / $gt …` |
-| Temporal-knowledge graph (bitemporal edges) | `GRAPH STORE` with `valid_from / valid_to / invalid_at` |
-| LangChain entity memory | `ENTITY STORE` with auto-bumped `mention_count` |
-| "Notify me when X changes" | `LISTEN/NOTIFY` push + durable subscription queues |
-| Replay / time-travel queries | `FOR SYSTEM_TIME AS OF TRANSACTION <xid>` |
-| Postgres clients (psql, DBeaver, JDBC) | Drop-in PG wire protocol on port 5433 |
-| On-prem regulated deploys | AES-256 Transparent Data Encryption (TDE) |
+EvolutionDB is one binary. You do not need to run several services. From that one binary you get:
 
-For the head-to-head against MongoDB / Pinecone / Zep / Mem0 / Weaviate
-see [docs/comparison.md](docs/comparison.md).
+- A relational SQL engine with tables, indexes, constraints, joins, subqueries, transactions, and MVCC.
+- Vector storage and similarity search backed by an HNSW index.
+- JSON document storage with a filter syntax.
+- Time-travel queries that read data as of an earlier transaction.
+- A push system. A client can listen for changes and receive a message when the data changes.
+- The PostgreSQL wire protocol on port 5433. It also has a native text protocol called EVO on port 9967.
+- AES-256 encryption at rest for on-premise deployments.
 
-## 60-second quickstart
+## Quick start with Docker
 
 ```bash
-docker compose up -d              # PG:5433  EVO:9967
-
-# Python (LangGraph drop-in via the bundled adapter)
-export PYTHONPATH=$PWD/client/python-evosql-memory:$PYTHONPATH
-python3 - <<'PY'
-from evosql_memory import connect
-from evosql_memory.adapters.langgraph_evosql import EvoCheckpointSaver, EvoBaseStore
-
-c = connect("127.0.0.1", 9967, "admin", "admin")
-saver = EvoCheckpointSaver(c, "demo_ck")
-store = EvoBaseStore(c, "demo_mem")
-
-cfg = {"configurable": {"thread_id": "agent-1", "checkpoint_ns": ""}}
-saver.put(cfg, {"id": "cp-1", "channels": {"step": 1}})
-print("latest:", saver.get(cfg))
-
-store.put(("user_42", "memos"), "favourite", {"genre": "jazz"})
-print("memo:",   store.get(("user_42", "memos"), "favourite"))
-PY
+docker compose up -d        # starts the server on PG 5433 and EVO 9967
 ```
 
-The full quickstart (C SDK, ReAct demo, Mem0 drop-in, reactive
-subscription) is at [docs/quickstart.md](docs/quickstart.md).
+Then connect with any PostgreSQL client:
 
-## SQL surface (first-class objects)
+```bash
+psql -h 127.0.0.1 -p 5433 -U admin -d testdb
+```
+
+The default user is `admin`. You set the password with the `EVOSQL_PASSWORD` environment variable. If you leave it unset, the server prints a random password once at startup.
+
+## Build from source
+
+You need GCC, Bison, Flex, and liblz4. For TLS you also need libssl-dev.
+
+```bash
+make              # build the engine (src/backend/evosql) and the server (src/server/evosql-server)
+make server TLS=1 # build the server with TLS support
+make tools        # build the diagnostic tools
+make generate     # regenerate the parser after editing the grammar
+make clean        # remove build output
+```
+
+## Special SQL objects
+
+EvolutionDB adds a few first-class objects on top of normal SQL. They hold the kinds of state that agent frameworks use.
 
 ```sql
--- LangGraph BaseCheckpointSaver
-CREATE CHECKPOINT STORE agent_checkpoints;
-
--- LangGraph BaseStore + LangChain VectorStoreRetrieverMemory
-CREATE MEMORY STORE agent_memories WITH (embedding_dim = 1536);
-
--- LangChain BaseChatMessageHistory + LlamaIndex ChatMemoryBuffer
-CREATE MESSAGE LOG agent_chat;
-
--- Haystack DocumentStore + LlamaIndex BaseDocumentStore
-CREATE DOCUMENT STORE agent_docs;
-
--- Zep Graphiti + Mem0 graph mode (bitemporal edges)
-CREATE GRAPH STORE agent_kg;
-
--- LangChain ConversationEntityMemory + CrewAI EntityMemory
-CREATE ENTITY STORE agent_entities;
+CREATE MEMORY STORE agent_memories WITH (embedding_dim = 1536);  -- key-value plus vector search
+CREATE CHECKPOINT STORE agent_checkpoints;                       -- saved agent state
+CREATE MESSAGE LOG agent_chat;                                   -- append-only chat history
+CREATE DOCUMENT STORE agent_docs;                                -- JSON documents with filters
+CREATE GRAPH STORE agent_kg;                                     -- time-versioned edges
+CREATE ENTITY STORE agent_entities;                              -- entities with mention counts
 ```
 
-Plus everything you'd expect from a relational engine: tables,
-indexes, constraints, JOINs, subqueries, transactions, MVCC,
-prepared statements, COPY, replication, RLS.
+You also get everything a relational engine gives you. That includes prepared statements, COPY, replication, and row-level security.
 
-## Clients
+## Repository layout
 
-| Layer            | Path                                   | Status |
-|------------------|----------------------------------------|--------|
-| C SDK            | [`client/libevosql-memory/`](client/libevosql-memory/) | shipped — connect, exec, memory/checkpoint, vector helpers, NOTIFY + CDC subscribe |
-| Python ctypes    | [`client/python-evosql-memory/`](client/python-evosql-memory/) | shipped — auto-discovers the SDK; thread-local errors |
-| Framework adapters | `evosql_memory.adapters.*`           | shipped — LangGraph, LangChain, LlamaIndex, CrewAI, AutoGen, Mem0 |
-| Postgres wire    | `psql -h 127.0.0.1 -p 5433 …`          | shipped — DBeaver / pgAdmin / JDBC compatible |
-| Native EVO       | `./cli/evosql-cli -W admin`            | shipped |
+The layout follows the PostgreSQL source tree.
 
-Compatibility tests for every adapter run on push and PR via
-[`framework-compat.yml`](.github/workflows/framework-compat.yml).
-
-## Performance (single process, p99)
-
-From `bench/run_all.py` (full report at
-[docs/benchmarks/v1.md](docs/benchmarks/v1.md)):
-
-| op                          | p99 (ms) |
-|-----------------------------|---------:|
-| `MEMORY PUT`                | ~ 8 |
-| `MEMORY GET`                | ~ 2 |
-| `CHECKPOINT PUT`            | ~ 5 |
-| `CHECKPOINT GET LATEST`     | ~ 1 |
-| `MEMORY SEARCH` (top-10)    | ~ 4 |
-| `NOTIFY` push delivery      | ~ 0.4 |
-| polling @ 1 s interval      | ~ 990 |
-
-Push is roughly **2900× faster** than a 1-second polling loop — the
-gap that lets reactive agents react in real time instead of every
-poll tick.
-
-## Build
-
-**Requirements:** GCC, Bison, Flex, libreadline-dev. For TLS:
-libssl-dev.
-
-```bash
-make                  # core engine + adaptor + CLI
-make adaptor TLS=1    # build with OpenSSL TLS support
-make clean
-make generate         # regenerate Flex/Bison parser from .y/.l files
-make -C client/libevosql-memory   # build the C SDK
+```
+src/include/    engine headers (everything compiles with -I src/include)
+src/backend/    the engine, grouped by subsystem:
+                storage, access, commands, executor, utils, parser
+src/server/     the dual-protocol server (PostgreSQL wire and EVO text)
+src/bin/tools/  diagnostic tools
+test/           Python tests that run over the wire protocol
+infra/          docker, compose, and helm files
+packaging/      installers for macOS, Linux, Windows, and the AUR
+docs/           the reference manual site and its source
 ```
 
-## Docker
+## Using it from an application
 
-```bash
-docker compose up -d                    # PG:5433  EVO:9967
-docker compose down                     # stop (data preserved)
-docker compose down -v                  # stop and delete data
-
-docker run -d -p 5433:5433 -p 9967:9967 \
-    -e EVOSQL_PASSWORD=mysecret evolutiondb/evolutiondb:latest
-```
-
-## Run the whole stack (engine + agent)
-
-One command brings up the SQL engine plus the standalone agent web UI:
-
-```bash
-./install.sh                            # bootstrap + build + up
-```
-
-`install.sh` is idempotent. It checks Docker is present, copies
-`.env.example` to `.env` (never overwriting an existing `.env`),
-generates a random `EVOSQL_PASSWORD` and `EVOSQL_ENCRYPTION_KEY` if those
-are still blank/`admin`, then runs the agent profile. To do it by hand:
-
-```bash
-cp .env.example .env                    # then edit secrets in .env
-docker compose --profile agent up -d    # engine + agent web UI
-```
-
-A plain `docker compose up -d` (no `--profile agent`) still brings up the
-engine only, exactly as before. After the stack is up:
-
-- PostgreSQL wire : `127.0.0.1:5433`
-- EVO protocol    : `127.0.0.1:9967`
-- Agent web UI    : `http://127.0.0.1:8800`
-
-Set `ANTHROPIC_API_KEY` in `.env` to enable the cloud LLM (without it the
-agent runs with no LLM turns).
-
-### Secure-by-default posture
-
-- **Loopback host ports.** Every published port binds to `127.0.0.1`, so
-  a fresh install is not reachable from the LAN or internet.
-- **Set secrets in `.env`.** `EVOSQL_PASSWORD` defaults to `admin` only
-  when left blank; change it (or let `install.sh` generate one). The
-  `.env` file is gitignored — never commit it.
-- **Exposing publicly is opt-in.** To serve beyond loopback you must set
-  `EVOSQL_BIND=0.0.0.0` (the engine binds `127.0.0.1` by default),
-  provide a TLS cert/key, and set `EVOSQL_MCP_AUTH_TOKEN` for the MCP HTTP
-  transport. Drop the `127.0.0.1:` prefix on the compose port mappings
-  only after those are in place.
-
-### Data-handling notes (what is and isn't protected)
-
-- **PII masking is opt-in and field-level.** At rest it runs per
-  connector via `protect_record()`; at retrieval via
-  `EVOSQL_PII_RETRIEVAL`; outbound to an LLM it masks only when
-  `EVOSQL_PII_EGRESS=on`. Default `off` means enrichment text reaches the
-  model provider unmasked. (The agent image always installs
-  `evolutiondb-pii`, so turning egress masking `on` never fail-closes.)
-  name/DOB rules ship disabled (heuristic only).
-- **Encryption at rest (TDE) needs both halves.** Whole-DB AES-256-CTR
-  page encryption activates only with a `TLS=1` / `EVO_ENCRYPTION` build
-  *and* an `EVOSQL_ENCRYPTION_KEY` passphrase. Without both, the DB file
-  *and* the WAL are plaintext on disk. Page 0 (FileHeader) is always
-  plaintext. CTR gives confidentiality, not tamper-detection.
-- **Send invariant (ADR-004).** The agent never sends on its own; it
-  drafts and queues, a human approves (`approve_send`), and delivery is
-  dry-run unless explicitly opted in.
-- **Roadmap, not shipped:** key rotation, per-tenant RLS, engine
-  `MASKING` SQL, and reliable person-name redaction.
-- **Sub-processors depend on what you enable.** Models: Anthropic
-  (default, optional), OpenAI (optional embeddings), Gemini/Azure (named,
-  not wired by default), Ollama (local, no egress). Connectors that call
-  external APIs: Google (Gmail/Calendar/YouTube), Microsoft
-  (Outlook/Teams), Slack, GitHub, Notion, Azure DevOps. Local-only (no
-  sub-processor): iMessage, Apple Notes, Browser history, Claude sessions.
-  Connector scopes are read-only by default; send scopes are opt-in.
+Any PostgreSQL client works over port 5433. The agent memory features have their own client libraries. The C SDK, the language bindings for Python, Node, Go, Rust, Java, .NET, Ruby, and Swift, the MCP server, and the connectors all live in the [evolutionagent](https://github.com/alptekin/evolutionagent) repository.
 
 ## Testing
 
+Start a server first. Then run the Python tests. They connect over the wire protocol and need no extra setup. The default credentials are `admin` and `admin`, and the default database is `testdb`.
+
 ```bash
 docker compose up -d
-python tests/test_memory_store.py
-python tests/test_checkpoint_store.py
-python tests/test_evo_protocol.py
-python client/python-evosql-memory/python_tests/test_adapters.py
-python tests/framework_compat/langgraph/test_lg_compat.py
+python test/test_where.py
+python test/test_aggregates.py
+python test/test_evo_protocol.py
 ```
-
-## Background
-
-EvolutionDB started ~18 years ago as a personal C database project
-to learn how engines work internally — parser, storage, indexing,
-execution layer, all from scratch. It was archived on a DVD and
-sat dormant for over a decade.
-
-Resumed in early 2026 with AI-assisted development, the engine
-matured into a Postgres-compatible relational core and then pivoted
-toward agent memory: storing the kind of structured, semi-structured,
-vector-indexed, and time-versioned state that AI agent frameworks
-need but currently get by stitching together MongoDB + Pinecone +
-custom polling + a hand-rolled checkpointer.
-
-The agent-memory pivot is documented in
-[ADR-002](docs/adr/ADR-002-agent-memory-platform-roadmap.md).
 
 ## Documentation
 
-- [60-second quickstart](docs/quickstart.md)
-- [Comparison vs MongoDB / Pinecone / Zep / Mem0 / Weaviate](docs/comparison.md)
-- [Benchmarks](docs/benchmarks/v1.md)
-- [ADR-002 — Agent Memory pivot](docs/adr/ADR-002-agent-memory-platform-roadmap.md)
-- [Release notes 3.0.0](docs/release-notes/3.0.0.md)
-- [Launch blog post](docs/blog/2026-launch.md)
+The reference manual is the site under `docs/`. The architecture notes are in the project [Wiki](../../wiki).
 
-Architecture deep-dives live in the [Wiki](../../wiki):
+## Background
 
-- [Architecture Overview](../../wiki/Architecture)
-- [Unified Storage](../../wiki/Unified-Storage-Overview)
-- [Storage Engine](../../wiki/Storage-Engine) · [B+ Tree](../../wiki/BPlus-Tree) · [System Catalog](../../wiki/System-Catalog)
-- [SQL Parser](../../wiki/SQL-Parser) · [SQL Operations](../../wiki/SQL-Operations) · [Expression Engine](../../wiki/Expression-Engine)
-- [Transactions](../../wiki/Transactions)
-- [PostgreSQL Wire Protocol](../../wiki/PostgreSQL-Wire-Protocol) · [EVO Protocol](../../wiki/EVO-Protocol)
-- [Authentication and Security](../../wiki/Authentication-and-Security)
-- [Server Architecture](../../wiki/Server-Architecture)
-- [CLI Client](../../wiki/CLI-Client)
+EvolutionDB began about 18 years ago as a personal project in C. The goal was to learn how a database works on the inside. That meant writing the parser, the storage layer, the indexes, and the execution layer by hand. The project was then archived on a DVD and left untouched for more than a decade.
+
+Work resumed in early 2026 with AI-assisted development. The engine grew into a PostgreSQL-compatible core. After that it gained the features that agent systems need, such as vector search, JSON storage, time-versioned history, and push notifications.
+
+## License
+
+See [COPYRIGHT.md](COPYRIGHT.md).
