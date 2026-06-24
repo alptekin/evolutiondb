@@ -40,7 +40,7 @@ distros.
 sudo apt-get install -y dpkg-dev alien fakeroot
 # AppImage support is optional; install appimagetool if you want it.
 
-# Version defaults to evolution/db/version.h. Pass an empty string
+# Version defaults to src/include/version.h. Pass an empty string
 # as the second argument when you also need to set arch.
 ./build.sh /path/to/evosql-server-linux-x86_64 ''  amd64
 ./build.sh /path/to/evosql-server-linux-arm64  ''  arm64

@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Table API and DML | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>Table API and DML</h1>
+<p class="lede">The Table API in <code>table_api.h</code> and <code>table_api.c</code> bridges SQL operations and the storage engine. It wraps catalog resolution, heap page input and output, primary key management, and full table scans. The DML modules build INSERT, SELECT, UPDATE, DELETE, DROP, CREATE, and index operations on top of it.</p>
+
+<p>All table data is stored in <strong>slotted pages</strong> for heap storage. Rows are indexed by <strong>B+ trees</strong> through the <code>btree2</code> module. The <a href="/3.0/system-catalog/">system catalog</a> tracks table metadata, column definitions, constraints, and index descriptors. Every DML module depends on the Table API. See also the <a href="/3.0/unified-storage-overview/">unified storage overview</a>, the <a href="/3.0/page-manager-and-slotted-pages/">page manager and slotted pages</a>, and the <a href="/3.0/bplus-tree/">B+ tree</a> pages.</p>
+
+<h2 id="table-api">Table API</h2>
+<p>The Table API is a focused set of functions in <code>table_api.h</code> and <code>table_api.c</code>. It encapsulates catalog resolution, heap page input and output, primary key management, and full table scanning. Every DML module depends on it.</p>
+
+<h3 id="tapi-resolve">tapi_resolve, catalog resolution</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">tapi_resolve</span>(<span class="c-key">const char</span> *name_or_path, <span class="c-fn">TableDesc</span> *td,
+                 <span class="c-fn">ColumnDesc</span> *cols, <span class="c-key">int</span> *ncols);</code></pre>
+<p>This function resolves a table name into a <code>TableDesc</code> structure and an optional <code>ColumnDesc</code> array. The name can be a plain name like <code>"employees"</code>. It can also be a full path like <code>"root/evosql/default/employees"</code>. The work happens in three steps.</p>
+<ol>
+<li>It strips directory prefixes and the <code>.dat</code> extension through <code>tapi_basename()</code>.</li>
+<li>It calls <code>cat_resolve_table(g_currentDatabase, g_currentSchema, name, td)</code> to look up the table in the system catalog. The lookup uses the current database and schema context.</li>
+<li>If <code>cols</code> and <code>ncols</code> are non-NULL, it calls <code>cat_find_columns(td-&gt;table_id, cols, CAT_MAX_COLUMNS)</code> to fill the column descriptors.</li>
+</ol>
+<p>It returns <code>0</code> on success. It returns <code>-1</code> if the table does not exist.</p>
+
+<h3 id="tapi-pk-tree">tapi_pk_tree, B+ tree handle for the primary key</h3>
+<pre><code><span class="c-key">static inline</span> <span class="c-fn">BTree2</span> <span class="c-fn">tapi_pk_tree</span>(<span class="c-key">const</span> <span class="c-fn">TableDesc</span> *td)
+{
+    <span class="c-fn">BTree2</span> tree = { td-&gt;pk_root_page };
+    <span class="c-key">return</span> tree;
+}</code></pre>
+<p>This function builds a <code>BTree2</code> handle from the table's <code>pk_root_page</code>. It is a zero-cost inline. Every DML operation uses it to reach the primary key index.</p>
+
+<h3 id="tapi-build-pk-key">tapi_build_pk_key and tapi_build_pk_key_from_vals, PK key composition</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">tapi_build_pk_key</span>(<span class="c-key">const</span> <span class="c-fn">ColumnDesc</span> *cols, <span class="c-key">int</span> ncols,
+                      <span class="c-key">const char</span> *record, <span class="c-key">char</span> *key_out, <span class="c-key">int</span> key_size);
+
+<span class="c-key">int</span> <span class="c-fn">tapi_build_pk_key_from_vals</span>(<span class="c-key">const</span> <span class="c-fn">ColumnDesc</span> *cols, <span class="c-key">int</span> ncols,
+                                <span class="c-key">char</span> **vals, <span class="c-key">int</span> nvals,
+                                <span class="c-key">char</span> *key_out, <span class="c-key">int</span> key_size);</code></pre>
+<p>These functions build a composite primary key string from record fields. They scan the <code>ColumnDesc</code> array for columns with <code>is_pk == 1</code> and join their values.</p>
+<ul>
+<li><strong>Single PK.</strong> The key looks like <code>"42"</code>.</li>
+<li><strong>Composite PK.</strong> The key looks like <code>"42|alice"</code>. The parts are pipe-delimited.</li>
+</ul>
+<p>If no column has <code>is_pk</code> set, the first column is used as a fallback. The <code>_from_vals</code> variant takes a pre-parsed value array. The plain variant parses a semicolon-delimited record string on its own.</p>
+
+<h3 id="tapi-get-pk-indices">tapi_get_pk_indices, PK column positions</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">tapi_get_pk_indices</span>(<span class="c-key">const</span> <span class="c-fn">ColumnDesc</span> *cols, <span class="c-key">int</span> ncols,
+                        <span class="c-key">int</span> *indices, <span class="c-key">int</span> max);</code></pre>
+<p>This function returns the ordinal positions of PK columns within the schema. UPDATE and DELETE use it to detect when a SET clause changes a PK column. A change to a PK column requires B+ tree key updates.</p>
+
+<h3 id="heap-ops">Heap page operations</h3>
+<p>All record data lives in <strong>slotted pages</strong>. The pages are chained together through <code>PageHeader.next_page</code>. The Table API provides four heap operations.</p>
+
+<h4 id="tapi-heap-insert">tapi_heap_insert</h4>
+<pre><code><span class="c-fn">RowID</span> <span class="c-fn">tapi_heap_insert</span>(<span class="c-fn">TableDesc</span> *td, <span class="c-key">const char</span> *record, <span class="c-fn">uint16_t</span> rec_len);</code></pre>
+<ol>
+<li>It tries <code>slot_insert()</code> on the table's current <code>heap_page</code>.</li>
+<li>If the page is full, or if no heap page exists, it allocates a fresh <code>PAGE_DATA</code> page through <code>pgm_alloc_page()</code>. It initializes the page with <code>slot_page_init()</code>. It chains the page by setting <code>new_page-&gt;next_page = td-&gt;heap_page</code>.</li>
+<li>It updates <code>td-&gt;heap_page</code> and persists it through <code>cat_update_heap_page()</code>.</li>
+<li>It returns the <code>RowID</code> of the inserted record. The RowID is a page number and a slot index. It returns <code>{0, 0}</code> on error.</li>
+</ol>
+
+<h4 id="tapi-heap-read">tapi_heap_read</h4>
+<pre><code><span class="c-key">int</span> <span class="c-fn">tapi_heap_read</span>(<span class="c-fn">RowID</span> rid, <span class="c-key">char</span> *buf, <span class="c-key">int</span> bufsize);</code></pre>
+<p>This function reads the page at <code>rid.page_no</code>. It then calls <code>slot_read()</code> for <code>rid.slot_idx</code>. It returns the record length, which is null-terminated, or <code>-1</code> on error.</p>
+
+<h4 id="tapi-heap-update">tapi_heap_update</h4>
+<pre><code><span class="c-fn">RowID</span> <span class="c-fn">tapi_heap_update</span>(<span class="c-fn">TableDesc</span> *td, <span class="c-fn">RowID</span> old_rid,
+                       <span class="c-key">const char</span> *new_record, <span class="c-fn">uint16_t</span> rec_len);</code></pre>
+<p>This function tries an <strong>in-place update</strong> through <code>slot_update()</code>. If the record does not fit in the existing slot, it falls back to delete-then-insert. The slot's free space is not enough in that case. It deletes the old slot. It then calls <code>tapi_heap_insert()</code> to place the record in a page with space. It returns the RowID, which may have changed.</p>
+
+<h4 id="tapi-heap-delete">tapi_heap_delete</h4>
+<pre><code><span class="c-key">int</span> <span class="c-fn">tapi_heap_delete</span>(<span class="c-fn">RowID</span> rid);</code></pre>
+<p>This function reads the page. It calls <code>slot_delete()</code> to mark the slot as free. It writes the page back. It returns <code>0</code> on success.</p>
+
+<h3 id="table-scan">Full table scan</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">tapi_scan_begin</span>(<span class="c-key">const</span> <span class="c-fn">TableDesc</span> *td, <span class="c-fn">TableScanCursor</span> *cursor);
+<span class="c-key">int</span> <span class="c-fn">tapi_scan_next</span>(<span class="c-fn">TableScanCursor</span> *cursor,
+                   <span class="c-key">char</span> *pk_key_out, <span class="c-key">char</span> *record_out, <span class="c-key">int</span> rec_out_size);</code></pre>
+<p>Table scans iterate over the <strong>PK B+ tree</strong>, not the heap chain. This yields records in primary key order. <code>tapi_scan_begin()</code> opens a cursor at the first leaf entry through <code>bt2_cursor_first()</code>. Each call to <code>tapi_scan_next()</code> advances the cursor with <code>bt2_cursor_next()</code>. It retrieves the PK key and the <code>RowID</code>. It then fetches the record through <code>tapi_heap_read()</code>.</p>
+<p>The <code>TableScanCursor</code> wraps a <code>BTree2Cursor</code> and the <code>BTree2</code> handle.</p>
+<pre><code><span class="c-key">typedef struct</span> {
+    <span class="c-fn">BTree2Cursor</span> bt_cursor;
+    <span class="c-fn">BTree2</span>       tree;
+} <span class="c-fn">TableScanCursor</span>;</code></pre>
+
+<h3 id="tapi-free-heap-pages">tapi_free_heap_pages</h3>
+<pre><code><span class="c-key">void</span> <span class="c-fn">tapi_free_heap_pages</span>(<span class="c-key">const</span> <span class="c-fn">TableDesc</span> *td);</code></pre>
+<p>This function walks the heap page chain. It starts at <code>td-&gt;heap_page</code> and follows <code>next_page</code> pointers. It calls <code>pgm_free_page()</code> on each page. DROP TABLE and bulk cleanup use it.</p>
+
+<h2 id="dml">DML operations</h2>
+
+<h3 id="create-table">CREATE TABLE (Create.c)</h3>
+<p><code>CreateTableProcess()</code> orchestrates table creation through the catalog and storage layers.</p>
+<ol>
+<li><strong>Catalog registration.</strong> It calls <code>cat_create_table()</code> to register the table in <code>CAT_SYS_TABLES</code>. This assigns a unique <code>table_id</code>.</li>
+<li><strong>PK B+ tree creation.</strong> It calls <code>bt2_create()</code> to allocate the root page for the primary key index. The root page number is stored in the catalog through <code>cat_update_pk_root()</code>.</li>
+<li><strong>Column registration.</strong> It calls <code>cat_create_columns()</code> to store each column's metadata in <code>CAT_SYS_COLUMNS</code>. The metadata covers the name, type code, nullability, default value, uniqueness, and PK flag.</li>
+<li><strong>Constraint registration.</strong> It registers CHECK constraints, UNIQUE constraints, and FOREIGN KEY constraints in <code>CAT_SYS_CONSTRAINTS</code>.</li>
+<li><strong>AUTO_INCREMENT.</strong> If any column has AUTO_INCREMENT, the auto-increment column index, counter, and step are stored in the <code>TableDesc</code> and persisted in the catalog.</li>
+</ol>
+
+<h3 id="insert">INSERT (Insert.c)</h3>
+<pre><code><span class="c-key">INSERT INTO</span> employees (name, dept, salary) <span class="c-key">VALUES</span> (<span class="c-str">'Alice'</span>, <span class="c-str">'Eng'</span>, <span class="c-str">90000</span>);</code></pre>
+<p>Data flow.</p>
+<pre><code>Parser (RPN) --&gt; InsertProcess()
+                    |
+                    v
+            tapi_resolve(tblName)           -- catalog lookup
+                    |
+                    v
+            [Column reordering]             -- if INSERT specifies column list
+                    |
+                    v
+            [AUTO_INCREMENT]                -- generate value if needed
+                    |
+                    v
+            [Validation pipeline]           -- types, NOT NULL, UNIQUE, CHECK
+                    |
+                    v
+            [Unique index pre-check]        -- btree_search on secondary indexes
+                    |
+                    v
+            store_single_row()
+                |
+                +-- tapi_build_pk_key()     -- compose PK from values
+                +-- bt2_search()            -- duplicate PK check
+                +-- g_tx_undo_callback()    -- record TX_OP_INSERT undo entry
+                +-- tapi_heap_insert()      -- store record in slotted page
+                +-- bt2_insert()            -- index PK in B+ tree
+                    |
+                    v
+            [Secondary index update]        -- btree_insert() for each index
+                    |
+                    v
+            [Persist AUTO_INCREMENT]        -- cat_update_auto_inc()</code></pre>
+<p>Key details.</p>
+<ul>
+<li><strong>Multi-row INSERT.</strong> <code>g_insert</code> contains all rows separated by <code>ROW_SEP</code>, which is <code>\x02</code>. Each row is processed on its own through the validation and storage pipeline.</li>
+<li><strong>Column reordering.</strong> When the INSERT gives a column list, such as <code>INSERT INTO t (c2, c1) VALUES ...</code>, <code>reorder_row_for_column_map()</code> maps the user-specified column order to the schema's physical column order. It fills missing columns with DEFAULT values or NULL.</li>
+<li><strong>Duplicate PK detection.</strong> <code>store_single_row()</code> calls <code>bt2_search()</code> before inserting. If the key exists, it returns <code>1</code> for duplicate without changing any data.</li>
+<li><strong>Root page tracking.</strong> After <code>bt2_insert()</code>, the function updates <code>td-&gt;pk_root_page = pk_tree.root_page</code>. A B+ tree split may have created a new root page.</li>
+</ul>
+
+<h3 id="select">SELECT (Select.c)</h3>
+<pre><code><span class="c-key">SELECT</span> * <span class="c-key">FROM</span> employees <span class="c-key">WHERE</span> dept = <span class="c-str">'Eng'</span>;</code></pre>
+<p>Data flow.</p>
+<pre><code>Parser (RPN) --&gt; SelectAll() / SelectProcess()
+                    |
+                    v
+            tapi_resolve(tblName)           -- catalog lookup
+                    |
+                    v
+        +---[Access path decision]---+
+        |                            |
+   Full Scan                    PK Lookup
+        |                            |
+        v                            v
+tapi_scan_begin()           bt2_search(pk_tree, key)
+tapi_scan_next() loop            |
+        |                        v
+        v                  tapi_heap_read(rid)
+[WHERE evaluation]               |
+        |                        v
+        v                  [Single result]
+[ORDER BY sort]
+        |
+        v
+[Result output]</code></pre>
+<p><code>SelectAll()</code> handles <code>SELECT *</code> with two paths.</p>
+<ol>
+<li><strong>Simple scan.</strong> It opens a <code>TableScanCursor</code> through <code>tapi_scan_begin()</code>. It iterates with <code>tapi_scan_next()</code> and prints each record.</li>
+<li><strong>ORDER BY.</strong> It collects all records into an array. It sorts them with <code>qsort()</code> using the specified column index <code>g_sortColIndex</code> and direction <code>g_sortDesc</code>. It then prints the sorted result.</li>
+</ol>
+<p><code>SelectProcess()</code> lives in the adaptor's <code>query_executor.c</code>. It handles full SQL SELECT with WHERE.</p>
+<ul>
+<li><strong>PK Lookup.</strong> When WHERE matches the primary key column with <code>=</code>, it performs a single <code>bt2_search()</code> plus <code>tapi_heap_read()</code>.</li>
+<li><strong>Index Scan.</strong> When WHERE matches a secondary index column, it uses <code>sec_idx_search()</code> to find matching PKs. It then fetches each one through <code>bt2_search()</code> plus <code>tapi_heap_read()</code>.</li>
+<li><strong>Sequential Scan.</strong> It falls back to <code>tapi_scan_begin()</code> and <code>tapi_scan_next()</code> over all rows. It evaluates the WHERE expression on each record through <code>expr_evaluate()</code>.</li>
+</ul>
+
+<h3 id="update">UPDATE (Update.c)</h3>
+<pre><code><span class="c-key">UPDATE</span> employees <span class="c-key">SET</span> salary = <span class="c-str">95000</span> <span class="c-key">WHERE</span> name = <span class="c-str">'Alice'</span>;</code></pre>
+<p>Data flow.</p>
+<pre><code>Parser (RPN) --&gt; UpdateProcess()
+                    |
+                    v
+            tapi_resolve(tblName)           -- catalog lookup
+                    |
+                    v
+        [Identify matching rows]            -- WHERE scan or PK lookup
+                    |
+                    v
+            ApplyUpdateToRow()
+                |
+                +-- bt2_search(pk_tree, pkKey)
+                +-- tapi_heap_read(rid)     -- fetch current record
+                +-- g_tx_undo_callback()    -- TX_OP_UPDATE with old data
+                +-- [Modify fields]         -- apply SET column = value
+                +-- [CHECK validation]      -- expr_evaluate on updated row
+                +-- [Unique index check]    -- btree_search for conflicts
+                +-- tapi_heap_update()      -- write modified record
+                +-- bt2_update()            -- update PK tree if RowID moved
+                +-- [Secondary idx update]  -- btree_delete old + btree_insert new</code></pre>
+<p>Key details.</p>
+<ul>
+<li><strong>In-place update versus relocated update.</strong> <code>tapi_heap_update()</code> first tries <code>slot_update()</code> in place. If the record grew and no longer fits, it deletes the old slot and inserts into a page with space. That returns a different <code>RowID</code>. When the RowID changes, <code>bt2_update()</code> updates the PK B+ tree's value pointer.</li>
+<li><strong>Secondary index maintenance.</strong> The SET clause may modify an indexed column. For each secondary index on a modified column, the function deletes the old composite key with <code>btree_delete(path, old_value, pk)</code>. It then inserts the new one with <code>btree_insert(path, new_value, pk)</code>.</li>
+<li><strong>CHECK constraint re-evaluation.</strong> After the field values change in memory, all CHECK constraints are re-evaluated against the updated row before it is persisted.</li>
+</ul>
+
+<h3 id="delete">DELETE (Delete.c)</h3>
+<pre><code><span class="c-key">DELETE FROM</span> employees <span class="c-key">WHERE</span> dept = <span class="c-str">'Eng'</span>;</code></pre>
+<p>Data flow.</p>
+<pre><code>Parser (RPN) --&gt; DeleteProcess()
+                    |
+                    v
+            tapi_resolve(tblName)           -- catalog lookup
+                    |
+                    v
+        +---[WHERE present?]---+
+        |                      |
+   Expression WHERE       PK-based delete
+        |                      |
+        v                      v
+tapi_scan_begin/next()    bt2_search(pkKey)
+[expr_evaluate loop]           |
+[collect matching keys]        v
+        |                tapi_heap_read(rid)
+        v                      |
+[Phase 2: delete]              v
+    for each match:       g_tx_undo_callback()
+        |                      |
+        +-- bt2_search()       v
+        +-- tapi_heap_read()  [sec idx cleanup]
+        +-- g_tx_undo_callback()    |
+        +-- [sec idx cleanup]      v
+        +-- tapi_heap_delete() tapi_heap_delete()
+        +-- bt2_delete()       bt2_delete()</code></pre>
+<p>Two-phase WHERE delete.</p>
+<ol>
+<li><strong>Phase 1, scan and collect.</strong> It iterates all records through <code>tapi_scan_begin()</code> and <code>tapi_scan_next()</code>. It evaluates the WHERE expression on each row. It collects matching PK keys into a dynamically allocated array called <code>matchKeys</code>. This avoids modifying the B+ tree while iterating it.</li>
+<li><strong>Phase 2, delete collected.</strong> For each collected key, it looks up the <code>RowID</code> through <code>bt2_search()</code>. It reads the record for undo logging and index cleanup. It removes the row from secondary indexes. It then calls <code>tapi_heap_delete()</code> and <code>bt2_delete()</code>.</li>
+</ol>
+
+<h3 id="drop-table">DROP TABLE (Drop.c)</h3>
+<pre><code><span class="c-key">DROP TABLE</span> employees;</code></pre>
+<p>Data flow.</p>
+<pre><code>Parser (RPN) --&gt; DropTableProcess()
+                    |
+                    v
+            tapi_resolve(tblName)           -- catalog lookup
+                    |
+                    v
+            bt2_destroy(pk_tree)            -- free all PK B+ tree pages
+                    |
+                    v
+            tapi_free_heap_pages()          -- walk heap chain, pgm_free_page each
+                    |
+                    v
+            [Destroy secondary indexes]     -- cat_list_indexes + bt2_destroy each
+                    |
+                    v
+            cat_drop_table(table_id)        -- remove from catalog</code></pre>
+<p><code>cat_drop_table()</code> removes the table entry from the system catalog B+ trees. It also removes all associated column entries, all index entries, and all constraint entries. After DROP TABLE, all storage pages return to the free list. This covers PK tree nodes, heap data pages, and secondary index nodes.</p>
+<p><strong>TRUNCATE TABLE</strong> runs through <code>TruncateTableProcess()</code>. It preserves the table structure but deletes all data. It collects all PK keys through a B+ tree cursor scan. For each key it calls <code>tapi_heap_delete()</code> and <code>bt2_delete()</code>. The table's PK tree and heap pages stay allocated but empty.</p>
+
+<h2 id="secondary-indexes">Secondary indexes (Index.c)</h2>
+<p>Secondary indexes are B+ trees. Each key encodes both the indexed column value and the row's primary key. This ensures uniqueness at the B+ tree level.</p>
+
+<h3 id="composite-key-format">Composite key format</h3>
+<pre><code>"indexed_value" + \x1F + "pk_value"</code></pre>
+<p>The <strong>Unit Separator</strong> character is <code>\x1F</code>, ASCII 31. It is chosen for three reasons.</p>
+<ul>
+<li>It sorts before all printable characters. This enables efficient prefix scans.</li>
+<li>It never appears in user data.</li>
+<li>A prefix scan on <code>"indexed_value\x1F"</code> finds all rows that match that indexed value.</li>
+</ul>
+<p>For multi-column composite indexes, column values within the indexed portion are pipe-delimited. They look like <code>"val1|val2\x1Fpk"</code>.</p>
+
+<h3 id="sec-idx-core">Core operations</h3>
+
+<h4 id="sec-idx-search">sec_idx_search</h4>
+<pre><code><span class="c-key">int</span> <span class="c-fn">sec_idx_search</span>(<span class="c-fn">uint32_t</span> root_page, <span class="c-key">const char</span> *indexed_val,
+                   <span class="c-key">char</span> results[][<span class="c-str">256</span>], <span class="c-key">int</span> max_results);</code></pre>
+<p>This function performs a <strong>prefix scan</strong> on the secondary index B+ tree. It seeks to <code>"indexed_val\x1F"</code> through <code>bt2_cursor_seek()</code>. It then iterates forward with <code>bt2_cursor_next()</code> until the prefix no longer matches. It returns the PK portion of each matching key, which is the part after <code>\x1F</code>. A companion function <code>sec_idx_search_rids()</code> returns <code>RowID</code> values directly instead of PK strings.</p>
+
+<h4 id="sec-idx-insert">sec_idx_insert</h4>
+<pre><code><span class="c-key">int</span> <span class="c-fn">sec_idx_insert</span>(<span class="c-fn">uint32_t</span> *root_page, <span class="c-key">const char</span> *indexed_val,
+                   <span class="c-key">const char</span> *pk, <span class="c-fn">RowID</span> heap_rid);</code></pre>
+<p>This function builds the composite key through <code>sec_idx_make_key()</code>. It inserts the key into the B+ tree with the heap <code>RowID</code> as the value. It updates <code>*root_page</code> if the tree's root splits.</p>
+
+<h4 id="sec-idx-delete">sec_idx_delete</h4>
+<pre><code><span class="c-key">int</span> <span class="c-fn">sec_idx_delete</span>(<span class="c-fn">uint32_t</span> *root_page, <span class="c-key">const char</span> *indexed_val,
+                   <span class="c-key">const char</span> *pk);</code></pre>
+<p>This function builds the composite key and deletes it from the B+ tree. The PK component ensures only the exact row's entry is removed.</p>
+
+<h3 id="legacy-wrappers">Legacy wrapper functions</h3>
+<p>The DML modules use wrapper functions. These encode index identity as a path string in the format <code>"table_id:index_name:root_page"</code>.</p>
+<ul>
+<li><strong><code>btree_insert(path, key, pk)</code>.</strong> It parses the path, builds the composite key, calls <code>bt2_insert()</code>, and updates the catalog root page through <code>cat_update_index_root()</code> if it changed.</li>
+<li><strong><code>btree_search(path, key, results, max)</code>.</strong> It parses the path and delegates to <code>sec_idx_search()</code>.</li>
+<li><strong><code>btree_delete(path, key, pk)</code>.</strong> It parses the path, builds the composite key, calls <code>bt2_delete()</code>, and updates the catalog if the root changed.</li>
+</ul>
+<p>These wrappers give DML code a stable interface. They hide the composite key encoding and the catalog root-page tracking.</p>
+
+<h3 id="create-index">CREATE INDEX (CreateIndexProcess)</h3>
+<pre><code><span class="c-key">CREATE INDEX</span> idx_dept <span class="c-key">ON</span> employees(dept);
+<span class="c-key">CREATE UNIQUE INDEX</span> idx_email <span class="c-key">ON</span> employees(email);</code></pre>
+<ol>
+<li><strong>Resolve table.</strong> It calls <code>tapi_resolve()</code> to verify the table exists and to retrieve column metadata.</li>
+<li><strong>Verify columns.</strong> It checks that all specified columns exist in the schema. It supports composite indexes such as <code>col1,col2</code>.</li>
+<li><strong>Check duplicates.</strong> It queries <code>cat_list_indexes()</code> to see if an index on the same columns already exists. It respects <code>IF NOT EXISTS</code>.</li>
+<li><strong>Create B+ tree.</strong> It calls <code>bt2_create()</code> to allocate the root page for the index.</li>
+<li><strong>Populate from existing data.</strong> It opens a <code>TableScanCursor</code> and iterates all rows. For each row it does the following.
+<ul>
+<li>It extracts the indexed column values from the record.</li>
+<li>For UNIQUE indexes, it calls <code>sec_idx_search()</code> to check for duplicates. If a duplicate is found, it destroys the partially built tree and returns an error.</li>
+<li>It builds the composite key <code>indexed_value\x1Fpk_value</code> and calls <code>bt2_insert()</code>.</li>
+</ul>
+</li>
+<li><strong>Register in catalog.</strong> It calls <code>cat_create_index()</code> to store the index metadata. The metadata covers the name, root page, column list, and type <code>'U'</code> or <code>'N'</code>.</li>
+</ol>
+
+<h3 id="drop-index">DROP INDEX (DropIndexProcess)</h3>
+<ol>
+<li>It finds the index by name through <code>cat_find_index_by_name()</code>.</li>
+<li>It rejects dropping PK indexes, where <code>index_type == 'P'</code>.</li>
+<li>It destroys the B+ tree through <code>bt2_destroy()</code>.</li>
+<li>It removes the index from the catalog through <code>cat_drop_index()</code>.</li>
+</ol>
+
+<h3 id="explain">EXPLAIN integration</h3>
+<p>The query executor classifies access methods for <code>EXPLAIN</code> output.</p>
+<table>
+<thead>
+<tr><th>Access method</th><th>Condition</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>PK Lookup (Hash)</strong></td><td>WHERE clause matches the primary key column with <code>=</code></td></tr>
+<tr><td><strong>Index Scan (Unique B-tree)</strong></td><td>WHERE column has a UNIQUE secondary index</td></tr>
+<tr><td><strong>Index Scan (B-tree)</strong></td><td>WHERE column has a non-unique secondary index</td></tr>
+<tr><td><strong>Seq Scan</strong></td><td>No applicable index. A full table scan is required</td></tr>
+</tbody>
+</table>
+
+<h2 id="transactions">Transactions</h2>
+<p>EvoSQL implements single-connection ACID transactions. It uses an <strong>undo-log</strong> approach. The transaction subsystem lives in <code>adaptor/transaction.h</code> and <code>adaptor/transaction.c</code>.</p>
+
+<h3 id="tx-data-structures">Data structures</h3>
+<pre><code><span class="c-key">typedef struct</span> <span class="c-fn">UndoEntry</span> {
+    <span class="c-key">int</span>   op_type;          <span class="c-com">/* TX_OP_INSERT (1) / TX_OP_UPDATE (2) / TX_OP_DELETE (3) */</span>
+    <span class="c-key">char</span> *table;            <span class="c-com">/* table name */</span>
+    <span class="c-key">char</span> *key;              <span class="c-com">/* primary key value */</span>
+    <span class="c-key">char</span> *old_data;         <span class="c-com">/* previous record data (NULL for INSERT) */</span>
+    <span class="c-key">struct</span> <span class="c-fn">UndoEntry</span> *next; <span class="c-com">/* linked list, stack order (newest first) */</span>
+} <span class="c-fn">UndoEntry</span>;
+
+<span class="c-key">typedef struct</span> {
+    <span class="c-fn">UndoEntry</span> *head;        <span class="c-com">/* most recent entry (top of stack) */</span>
+    <span class="c-key">int</span>        count;       <span class="c-com">/* number of entries */</span>
+} <span class="c-fn">UndoLog</span>;</code></pre>
+<p>The undo log is a <strong>singly-linked list used as a stack</strong>. Entries are pushed to the head. This way rollback processes them in reverse chronological order.</p>
+
+<h3 id="tx-session">Session integration</h3>
+<p>Each client connection keeps a <code>SessionCtx</code>. It is defined in <code>adaptor/query_executor.h</code>.</p>
+<pre><code><span class="c-key">typedef struct</span> {
+    <span class="c-key">char</span> database[<span class="c-str">256</span>];
+    <span class="c-key">char</span> schema[<span class="c-str">256</span>];
+    <span class="c-key">char</span> username[<span class="c-str">256</span>];
+    <span class="c-key">int</span>       in_transaction;   <span class="c-com">/* 1 if BEGIN was issued */</span>
+    <span class="c-key">int</span>       tx_aborted;       <span class="c-com">/* 1 if error occurred in transaction */</span>
+    <span class="c-fn">UndoLog</span>  *undo_log;         <span class="c-com">/* undo entries for rollback */</span>
+} <span class="c-fn">SessionCtx</span>;</code></pre>
+<p>Transaction state transitions.</p>
+<ul>
+<li><strong>BEGIN.</strong> It sets <code>in_transaction = 1</code> and allocates a fresh <code>UndoLog</code>.</li>
+<li><strong>COMMIT.</strong> It sets <code>in_transaction = 0</code> and frees the <code>UndoLog</code>. Changes are now permanent.</li>
+<li><strong>ROLLBACK.</strong> It calls <code>undo_log_rollback()</code>, frees the log, and resets <code>in_transaction = 0</code> and <code>tx_aborted = 0</code>.</li>
+<li><strong>Error in transaction.</strong> It sets <code>tx_aborted = 1</code>. Later queries are rejected with SQLSTATE <code>25P02</code>. ROLLBACK is the exception.</li>
+</ul>
+
+<h3 id="tx-dml-hook">DML hook mechanism</h3>
+<p>DML operations record undo entries through a <strong>function pointer callback</strong>. It is declared as <code>g_tx_undo_callback</code> in <code>database.h</code>.</p>
+<pre><code><span class="c-key">void</span> (*<span class="c-fn">g_tx_undo_callback</span>)(<span class="c-key">int</span> op_type, <span class="c-key">const char</span> *table,
+                           <span class="c-key">const char</span> *key, <span class="c-key">const char</span> *data);</code></pre>
+<p>Before each query, <code>safe_query_execute()</code> in <code>server.c</code> checks whether the session is in a transaction.</p>
+<ul>
+<li><strong>In transaction.</strong> It sets <code>g_tx_undo_callback = tx_undo_callback</code>. It sets <code>g_current_undo_log</code>, which is thread-local, to the session's undo log.</li>
+<li><strong>Not in transaction.</strong> It sets both to <code>NULL</code>.</li>
+</ul>
+<p>Each DML operation checks <code>g_tx_undo_callback</code> before it modifies data.</p>
+<table>
+<thead>
+<tr><th>Operation</th><th>Undo entry</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>INSERT</strong></td><td><code>TX_OP_INSERT</code>, key = PK, old_data = NULL</td></tr>
+<tr><td><strong>UPDATE</strong></td><td><code>TX_OP_UPDATE</code>, key = PK, old_data = pre-update record</td></tr>
+<tr><td><strong>DELETE</strong></td><td><code>TX_OP_DELETE</code>, key = PK, old_data = deleted record</td></tr>
+</tbody>
+</table>
+<p>After the query completes, <code>safe_query_execute()</code> clears the callback and the thread-local undo log pointer.</p>
+
+<h3 id="tx-rollback">Rollback</h3>
+<p><code>undo_log_rollback()</code> traverses the undo log from head to tail. That is reverse chronological order. It applies the inverse operation for each entry.</p>
+<table>
+<thead>
+<tr><th>Original op</th><th>Undo action</th></tr>
+</thead>
+<tbody>
+<tr><td><code>TX_OP_INSERT</code></td><td><code>bt2_search()</code> to find the RowID, then <code>tapi_heap_delete()</code> and <code>bt2_delete()</code></td></tr>
+<tr><td><code>TX_OP_UPDATE</code></td><td><code>bt2_search()</code> to find the RowID, then <code>tapi_heap_update()</code> with the old data, then <code>bt2_update()</code> if the RowID moved</td></tr>
+<tr><td><code>TX_OP_DELETE</code></td><td><code>tapi_heap_insert()</code> with the old data, then <code>bt2_insert()</code> to restore the PK index entry</td></tr>
+</tbody>
+</table>
+<p>Each undo action resolves the table through <code>tapi_resolve()</code> using the stored table name. This ensures it works with the correct catalog state.</p>
+
+<h3 id="tx-disconnect">Disconnect auto-rollback</h3>
+<p>Both protocol handlers check for open transactions when a client disconnects. The PG wire protocol handler is <code>pg_handler.c</code>. The EVO text protocol handler is <code>evo_protocol.c</code>. If <code>session.in_transaction</code> is true, the handler does the following.</p>
+<ol>
+<li>It allocates a temporary <code>QueryContext</code>. The per-query context is already freed.</li>
+<li>It restores the database and schema from the session.</li>
+<li>It calls <code>undo_log_rollback()</code>.</li>
+<li>It frees the undo log and resets the session state.</li>
+</ol>
+<div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>This guarantees that uncommitted changes are never persisted when a client drops its connection.</div></div>
+
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

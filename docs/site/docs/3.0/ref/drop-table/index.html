@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DROP TABLE | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>DROP TABLE</h1>
+<p class="lede">Remove a table from the current database. This also removes its rows, indexes, constraints, and access policies.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">DROP TABLE</span> <span class="opt">[ <span class="c-key">IF EXISTS</span> ]</span> <var>table_name</var> <span class="opt">[ <span class="c-key">CASCADE</span> | <span class="c-key">RESTRICT</span> ]</span></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>DROP TABLE</code> removes one table and everything attached to it. EvolutionDB finds <var>table_name</var> in the system catalog. Then it removes the storage and metadata in one operation. The steps are below.</p>
+<ul>
+<li>The primary-key B+ tree is destroyed.</li>
+<li>All heap pages that hold the table's rows are freed back to the page manager.</li>
+<li>Every secondary index is destroyed. This covers B+ tree indexes and hash and unique-hash indexes.</li>
+<li>The catalog entry is dropped. This also removes the table's columns, indexes, and constraints.</li>
+<li>The table's inheritance link is removed if the table was a child of another table.</li>
+<li>Any row-level security policies on the table are removed.</li>
+</ul>
+<p>You can name only one table per statement. EvolutionDB's grammar accepts a single <var>table_name</var>. It does not accept a comma-separated list. That form is only for <code>TRUNCATE</code>.</p>
+<p>Two dependency checks run before any storage is touched.</p>
+<ul>
+<li><b>Inheritance children.</b> The drop is refused if the table has child tables that inherit from it. You must give <code>CASCADE</code> to allow it. With <code>CASCADE</code>, each child is dropped first, and so is each grandchild. The parent is dropped last.</li>
+<li><b>Views.</b> The drop is refused if any view in the current database uses the table by name. <code>CASCADE</code> does <em>not</em> override this check. You must drop the view that depends on the table first.</li>
+</ul>
+<div class="callout">
+<p>A successful <code>DROP TABLE</code> reports <code>command(s) completed successfully!..</code>. A refused drop raises <code>SQLSTATE 2BP01</code>. This means that dependent objects still exist.</p>
+</div>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt>IF EXISTS</dt>
+<dd>Do not raise an error if the table does not exist. EvolutionDB reports success instead. Without this clause, dropping a missing table is an error. The message is <code>table '<var>name</var>' not found</code>.</dd>
+
+<dt><var>table_name</var></dt>
+<dd>The name of the table to drop. The catalog finds the name in the current database and schema. Only one name is accepted.</dd>
+
+<dt>CASCADE</dt>
+<dd>Drop tables that inherit from this table first. This goes through the whole inheritance subtree. The named table is dropped after that. Note that <code>CASCADE</code> covers <em>inheritance children only</em>. It does not force the removal of dependent views. A view that uses the table still blocks the drop.</dd>
+
+<dt>RESTRICT</dt>
+<dd>Refuse to drop the table if any other object depends on it. This means an inheritance child. This is the default behavior when neither keyword is given.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>This example drops a table.</p>
+<pre><code><span class="c-key">DROP TABLE</span> employees;</code></pre>
+
+<p>Drop a table only if it exists. This hides the error when the table is missing.</p>
+<pre><code><span class="c-key">DROP TABLE IF EXISTS</span> staging_import;</code></pre>
+
+<p>This example drops a parent table along with every table that inherits from it.</p>
+<pre><code><span class="c-com">-- 'people' has child tables 'employees' and 'customers'</span>
+<span class="c-key">DROP TABLE</span> people <span class="c-key">CASCADE</span>;</code></pre>
+
+<p>Refuse to drop a table that still has children. This is the default behavior.</p>
+<pre><code><span class="c-key">DROP TABLE</span> people <span class="c-key">RESTRICT</span>;
+<span class="c-com">-- ERROR: cannot drop table "people" because other objects depend on it</span></code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p><code>DROP TABLE</code> is defined by the SQL standard. EvolutionDB supports part of it. Its behavior is closest to PostgreSQL. The real differences are below.</p>
+<ul>
+<li><b>Single table only.</b> The SQL standard and PostgreSQL allow a comma-separated list of tables, such as <code>DROP TABLE a, b, c</code>. EvolutionDB's grammar accepts only one <var>table_name</var> per statement.</li>
+<li><b>CASCADE scope.</b> In PostgreSQL, <code>CASCADE</code> also drops dependent objects such as views and foreign-key constraints in other tables. In EvolutionDB, <code>CASCADE</code> follows the <em>inheritance</em> tree only. This means child tables. A view that uses the table still blocks the drop. You must remove it first.</li>
+<li><b>RESTRICT</b> is the default. This matches the SQL standard and PostgreSQL.</li>
+<li><b>IF EXISTS</b> matches PostgreSQL. A missing table is reported as success and not as an error.</li>
+<li>EvolutionDB does not support the PostgreSQL-only <code>DROP TABLE ... CASCADE CONSTRAINTS</code>. It does not support schema-qualified multi-object drops. It also does not support the <code>TEMPORARY</code> keyword in this command.</li>
+</ul>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
+<li><a href="/3.0/ref/truncate/">TRUNCATE</a></li>
+<li><a href="/3.0/ref/drop-index/">DROP INDEX</a></li>
+<li><a href="/3.0/ref/alter-table/">ALTER TABLE</a></li>
+<li><a href="/3.0/ref/delete/">DELETE</a></li>
+</ul>
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

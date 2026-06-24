@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>System Catalog | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>System Catalog</h1>
+<p class="lede">The system catalog stores all database metadata inside the unified storage file. Eight B+ trees map keys to records, and the records live as semicolon-delimited strings on slotted pages. This page describes the catalog trees, the descriptor structs, the key design, the serialization format, and the full catalog API.</p>
+
+<p><strong>Source files.</strong> <code>evolution/db/catalog_internal.h</code>, <code>evolution/db/catalog_internal.c</code>.</p>
+<p><strong>Tests.</strong> <code>tests/test_catalog.c</code> with 30 tests.</p>
+
+<h2 id="overview">Overview</h2>
+<p>The system catalog stores all database metadata inside the unified storage file <code>evosql.db</code>. This metadata covers databases, schemas, tables, columns, indexes, constraints, user accounts, and privilege grants. There are no external metadata files. Every piece of metadata lives in one of eight B+ trees. The actual records are stored as semicolon-delimited strings on slotted pages. The B+ tree maps a key to a <code>RowID</code>. A <code>RowID</code> is a page number plus a slot index. The <code>RowID</code> points to the record on a slotted page.</p>
+
+<pre><code>                ┌─────────────────────────┐
+                │      FileHeader         │
+                │  (Page 0 of evosql.db)  │
+                │                         │
+                │  catalog_roots[0..7]    │  ← root page number of each B+ tree
+                │  next_table_id          │
+                │  next_schema_id         │
+                │  next_db_id             │
+                └────────┬────────────────┘
+                         │
+        ┌────────────────┼────────────────┐
+        ▼                ▼                ▼
+   B+ Tree 0        B+ Tree 1  ...  B+ Tree 7
+  (databases)       (schemas)       (grants)
+        │                │                │
+        ▼                ▼                ▼
+   Slotted Pages    Slotted Pages    Slotted Pages
+   (records)        (records)        (records)</code></pre>
+
+<p>All catalog I/O flows through the buffer pool and the page manager. There is no direct file access. See the <a href="/3.0/unified-storage-overview/">Unified Storage Overview</a> and the <a href="/3.0/page-manager-and-slotted-pages/">Page Manager and Slotted Pages</a> pages for the layers underneath.</p>
+
+<h2 id="catalog-trees">The Eight Catalog Trees</h2>
+<p>Each catalog tree is identified by a <code>CatalogID</code> constant defined in <code>page_mgr.h</code>. The root page number of every tree is persisted in the <code>FileHeader.catalog_roots[]</code> array on page 0.</p>
+
+<table>
+<thead>
+<tr><th>Constant</th><th>ID</th><th>Purpose</th><th>B+ Tree Key</th></tr>
+</thead>
+<tbody>
+<tr><td><code>CAT_SYS_DATABASES</code></td><td>0</td><td>Database registry</td><td><code>db_name</code></td></tr>
+<tr><td><code>CAT_SYS_SCHEMAS</code></td><td>1</td><td>Schema registry</td><td><code>db_id:schema_name</code></td></tr>
+<tr><td><code>CAT_SYS_TABLES</code></td><td>2</td><td>Table descriptors</td><td><code>schema_id:table_name</code></td></tr>
+<tr><td><code>CAT_SYS_COLUMNS</code></td><td>3</td><td>Column definitions</td><td><code>table_id:col_ordinal</code></td></tr>
+<tr><td><code>CAT_SYS_INDEXES</code></td><td>4</td><td>Secondary index metadata</td><td><code>table_id:index_name</code></td></tr>
+<tr><td><code>CAT_SYS_CONSTRAINTS</code></td><td>5</td><td>CHECK, UNIQUE, FK, PK constraints</td><td><code>table_id:ordinal</code></td></tr>
+<tr><td><code>CAT_SYS_USERS</code></td><td>6</td><td>User accounts with PBKDF2-SHA256 hashed passwords</td><td><code>username</code></td></tr>
+<tr><td><code>CAT_SYS_GRANTS</code></td><td>7</td><td>Privilege grants with DATABASE, SCHEMA, or TABLE scope</td><td><code>username:scope_type:scope_name</code></td></tr>
+</tbody>
+</table>
+
+<p>The <code>CatalogID</code> enum and the <code>CATALOG_ROOT_SLOTS</code> constant are defined in <code>page_mgr.h</code>. There are 16 slots and 8 are used.</p>
+
+<pre><code><span class="c-key">typedef</span> <span class="c-key">enum</span> {
+    <span class="c-fn">CAT_SYS_DATABASES</span>   = <span class="c-str">0</span>,
+    <span class="c-fn">CAT_SYS_SCHEMAS</span>     = <span class="c-str">1</span>,
+    <span class="c-fn">CAT_SYS_TABLES</span>      = <span class="c-str">2</span>,
+    <span class="c-fn">CAT_SYS_COLUMNS</span>     = <span class="c-str">3</span>,
+    <span class="c-fn">CAT_SYS_INDEXES</span>     = <span class="c-str">4</span>,
+    <span class="c-fn">CAT_SYS_CONSTRAINTS</span> = <span class="c-str">5</span>,
+    <span class="c-fn">CAT_SYS_USERS</span>       = <span class="c-str">6</span>,
+    <span class="c-fn">CAT_SYS_GRANTS</span>      = <span class="c-str">7</span>,
+    <span class="c-fn">CAT_MAX</span>              = <span class="c-str">8</span>
+} <span class="c-fn">CatalogID</span>;</code></pre>
+
+<h2 id="descriptors">Descriptor Structs</h2>
+<p>Each catalog tree has a matching C struct that represents one record. These structs are defined in <code>catalog_internal.h</code>.</p>
+
+<h3 id="database-desc">DatabaseDesc</h3>
+<pre><code><span class="c-key">typedef</span> <span class="c-key">struct</span> {
+    <span class="c-key">uint32_t</span> db_id;
+    <span class="c-key">char</span>     db_name[<span class="c-fn">CAT_MAX_NAME_LEN</span>];   <span class="c-com">// 128</span>
+} <span class="c-fn">DatabaseDesc</span>;</code></pre>
+<p>The B+ tree key is the database name itself, for example <code>"evosql"</code>. The record stores only the <code>db_id</code>. The name is recovered from the key.</p>
+
+<h3 id="schema-desc">SchemaDesc</h3>
+<pre><code><span class="c-key">typedef</span> <span class="c-key">struct</span> {
+    <span class="c-key">uint32_t</span> schema_id;
+    <span class="c-key">uint32_t</span> db_id;
+    <span class="c-key">char</span>     schema_name[<span class="c-fn">CAT_MAX_NAME_LEN</span>];
+} <span class="c-fn">SchemaDesc</span>;</code></pre>
+<p>Key format is <code>"%010u:%s"</code>. It is the zero-padded <code>db_id</code>, then a colon, then the schema name.</p>
+
+<h3 id="table-desc">TableDesc</h3>
+<pre><code><span class="c-key">typedef</span> <span class="c-key">struct</span> {
+    <span class="c-key">uint32_t</span> table_id;
+    <span class="c-key">uint32_t</span> schema_id;
+    <span class="c-key">char</span>     table_name[<span class="c-fn">CAT_MAX_NAME_LEN</span>];
+    <span class="c-key">uint32_t</span> pk_root_page;      <span class="c-com">// root page of the table's primary-key B+ tree</span>
+    <span class="c-key">uint32_t</span> heap_page;         <span class="c-com">// first slotted page for row storage (0 = lazy alloc)</span>
+    <span class="c-key">int</span>      num_columns;
+    <span class="c-key">int</span>      pad_size;
+    <span class="c-key">int</span>      auto_inc_col;      <span class="c-com">// column ordinal, or -1 if none</span>
+    <span class="c-key">int</span>      auto_inc_counter;
+    <span class="c-key">int</span>      auto_inc_step;
+} <span class="c-fn">TableDesc</span>;</code></pre>
+<p>Key format is <code>"%010u:%s"</code>. It is the zero-padded <code>schema_id</code>, then a colon, then the table name.</p>
+<p>When a table is created, <code>cat_create_table</code> also creates a dedicated B+ tree for the table's primary index. It records its root page in <code>pk_root_page</code>. The <code>heap_page</code> field starts at 0. It is set on the first row insertion through <code>cat_update_heap_page</code>.</p>
+
+<h3 id="column-desc">ColumnDesc</h3>
+<pre><code><span class="c-key">typedef</span> <span class="c-key">struct</span> {
+    <span class="c-key">uint32_t</span> table_id;
+    <span class="c-key">int</span>      col_ordinal;
+    <span class="c-key">char</span>     col_name[<span class="c-fn">CAT_MAX_NAME_LEN</span>];
+    <span class="c-key">int</span>      type_code;         <span class="c-com">// typeVal / 10000 = type family, % 10000 = size</span>
+    <span class="c-key">int</span>      is_not_null;
+    <span class="c-key">int</span>      is_unique;
+    <span class="c-key">int</span>      is_pk;
+    <span class="c-key">char</span>     default_val[<span class="c-fn">CAT_MAX_DEFAULT_LEN</span>];  <span class="c-com">// 256</span>
+} <span class="c-fn">ColumnDesc</span>;</code></pre>
+<p>Key format is <code>"%010u:%010d"</code>. It is the zero-padded <code>table_id</code>, then a colon, then the zero-padded <code>col_ordinal</code>. Both parts are numeric and zero-padded. This ensures columns are returned in ordinal order during prefix scans.</p>
+
+<h3 id="index-desc">IndexDesc</h3>
+<pre><code><span class="c-key">typedef</span> <span class="c-key">struct</span> {
+    <span class="c-key">uint32_t</span> table_id;
+    <span class="c-key">char</span>     index_name[<span class="c-fn">CAT_MAX_NAME_LEN</span>];
+    <span class="c-key">uint32_t</span> root_page;
+    <span class="c-key">char</span>     col_list[<span class="c-fn">CAT_MAX_NAME_LEN</span>];    <span class="c-com">// comma-separated column names</span>
+    <span class="c-key">char</span>     index_type;                     <span class="c-com">// 'P' primary, 'U' unique, 'N' normal</span>
+} <span class="c-fn">IndexDesc</span>;</code></pre>
+<p>Key format is <code>"%010u:%s"</code>. It is the zero-padded <code>table_id</code>, then a colon, then the index name.</p>
+
+<h3 id="constraint-desc">ConstraintDesc</h3>
+<pre><code><span class="c-key">typedef</span> <span class="c-key">struct</span> {
+    <span class="c-key">uint32_t</span> table_id;
+    <span class="c-key">int</span>      ordinal;
+    <span class="c-key">char</span>     constraint_type;   <span class="c-com">// 'C' check, 'F' foreign key, 'P' primary, 'U' unique</span>
+    <span class="c-key">char</span>     definition[<span class="c-str">1024</span>];
+    <span class="c-key">uint32_t</span> ref_table_id;      <span class="c-com">// for FK, 0 otherwise</span>
+    <span class="c-key">char</span>     ref_columns[<span class="c-fn">CAT_MAX_NAME_LEN</span>];
+} <span class="c-fn">ConstraintDesc</span>;</code></pre>
+<p>Key format is <code>"%010u:%010d"</code>. It is the zero-padded <code>table_id</code>, then a colon, then the zero-padded <code>ordinal</code>. The ordinal is assigned from a global counter named <code>g_constraint_ordinal</code>. That counter increments monotonically across all tables.</p>
+
+<h3 id="user-desc">UserDesc</h3>
+<pre><code><span class="c-key">typedef</span> <span class="c-key">struct</span> {
+    <span class="c-key">char</span> username[<span class="c-fn">CAT_MAX_NAME_LEN</span>];
+    <span class="c-key">char</span> password_hash[<span class="c-fn">CAT_MAX_HASH_LEN</span>];   <span class="c-com">// 512</span>
+} <span class="c-fn">UserDesc</span>;</code></pre>
+<p>The B+ tree key is the username. The record stores the PBKDF2-SHA256 password hash. The username is recovered from the key.</p>
+
+<h3 id="grant-desc">GrantDesc</h3>
+<pre><code><span class="c-key">typedef</span> <span class="c-key">struct</span> {
+    <span class="c-key">char</span> username[<span class="c-fn">CAT_MAX_NAME_LEN</span>];
+    <span class="c-key">int</span>  scope_type;            <span class="c-com">// 1=DATABASE, 2=SCHEMA, 3=TABLE</span>
+    <span class="c-key">char</span> scope_name[<span class="c-fn">CAT_MAX_NAME_LEN</span>];
+    <span class="c-key">char</span> privileges[<span class="c-fn">CAT_MAX_NAME_LEN</span>];  <span class="c-com">// comma-separated or "ALL"</span>
+    <span class="c-key">int</span>  grant_option;
+} <span class="c-fn">GrantDesc</span>;</code></pre>
+<p>Key format is <code>"%s:%d:%s"</code>. It is the username, then the scope type integer, then the scope name. This enables a prefix scan by <code>"username:"</code> to find all grants for a given user.</p>
+
+<h2 id="composite-keys">Composite Key Design</h2>
+<p>B+ tree keys are variable-length strings up to 255 bytes. The limit is <code>CAT_MAX_KEY_LEN</code>, which equals <code>BT2_MAX_KEY_LEN</code>. Composite keys use <code>:</code> as the separator. Numeric ID components are <strong>zero-padded to 10 digits</strong> so that lexicographic comparison preserves numeric ordering.</p>
+
+<pre><code>"0000000001:users"          schema 1, table "users"
+"0000000003:0000000002"     table 3, column ordinal 2
+"admin:1:evosql"            user "admin", scope DATABASE(1), database "evosql"</code></pre>
+
+<p>The B+ tree comparator performs lexicographic comparison on all keys. The keys contain <code>:</code> so they are treated as strings, not numbers. Zero-padding guarantees that <code>"0000000002"</code> sorts before <code>"0000000010"</code>.</p>
+<p>This encoding also enables efficient <strong>prefix scans</strong>. To list all columns of table 5, seek to <code>"0000000005:"</code> and iterate while keys still begin with that prefix. Every <code>cat_list_*</code> function uses this pattern. See the <a href="/3.0/bplus-tree/">B+ Tree</a> page for the cursor and comparator details.</p>
+
+<h2 id="serialization">Serialization Format</h2>
+<p>Records are stored as semicolon-delimited strings on slotted pages. This matches the project-wide convention for row storage. Each descriptor struct has a <code>serialize_*</code> and <code>deserialize_*</code> function pair.</p>
+<p>For example, a <code>TableDesc</code> serializes to this string.</p>
+
+<pre><code>"1;1;users;42;0;3;256;-1;0;0"
+ │ │ │     │  │ │ │   │  │ └─ auto_inc_step
+ │ │ │     │  │ │ │   │  └─── auto_inc_counter
+ │ │ │     │  │ │ │   └────── auto_inc_col (-1 = none)
+ │ │ │     │  │ │ └────────── pad_size
+ │ │ │     │  │ └──────────── num_columns
+ │ │ │     │  └────────────── heap_page
+ │ │ │     └───────────────── pk_root_page
+ │ │ └─────────────────────── table_name
+ │ └───────────────────────── schema_id
+ └─────────────────────────── table_id</code></pre>
+
+<p>Field extraction uses the internal <code>next_field()</code> helper. It reads characters up to the next <code>;</code> or the end of the string.</p>
+<p>For some descriptors, the key carries data that the record omits.</p>
+<ul>
+<li><strong>DatabaseDesc</strong>. The record contains only <code>db_id</code>. The name comes from the B+ tree key.</li>
+<li><strong>UserDesc</strong>. The record contains only the password hash. The username comes from the key.</li>
+</ul>
+<p>Maximum record size is <code>CAT_MAX_RECORD_LEN</code>, which is 2048 bytes.</p>
+
+<h2 id="id-generation">ID Generation</h2>
+<p>Object IDs for databases, schemas, and tables are auto-incrementing integers stored in the <code>FileHeader</code>.</p>
+
+<pre><code><span class="c-key">typedef</span> <span class="c-key">struct</span> {
+    <span class="c-com">// ...</span>
+    <span class="c-key">uint32_t</span> next_table_id;     <span class="c-com">// auto-increment for table IDs</span>
+    <span class="c-key">uint32_t</span> next_schema_id;    <span class="c-com">// auto-increment for schema IDs</span>
+    <span class="c-key">uint32_t</span> next_db_id;        <span class="c-com">// auto-increment for database IDs</span>
+    <span class="c-com">// ...</span>
+} <span class="c-fn">FileHeader</span>;</code></pre>
+
+<p>The <code>pgm_next_id(int id_type)</code> function atomically reads and increments the right counter.</p>
+
+<table>
+<thead>
+<tr><th><code>id_type</code></th><th>Counter</th><th>Used by</th></tr>
+</thead>
+<tbody>
+<tr><td>0</td><td><code>next_table_id</code></td><td><code>cat_create_table</code></td></tr>
+<tr><td>1</td><td><code>next_schema_id</code></td><td><code>cat_create_schema</code></td></tr>
+<tr><td>2</td><td><code>next_db_id</code></td><td><code>cat_create_database</code></td></tr>
+</tbody>
+</table>
+
+<p>IDs start at 1. The counter initializes to 1 in a fresh file header. IDs are never reused after deletion.</p>
+
+<h2 id="bootstrap">Initialization and Bootstrap</h2>
+
+<h3 id="startup">Startup sequence</h3>
+<ol>
+<li><code>pgm_init("evosql.db")</code> opens or creates the storage file. It initializes the page manager and the buffer pool.</li>
+<li><code>cat_init()</code> initializes the system catalog.</li>
+</ol>
+
+<h3 id="first-run">First run with an empty file</h3>
+<p><code>cat_init()</code> detects that <code>catalog_roots[CAT_SYS_DATABASES]</code> is 0. This means there is no existing catalog. It then performs a full bootstrap.</p>
+<ol>
+<li>Creates 8 B+ trees through <code>bt2_create()</code>.</li>
+<li>Stores each tree's root page number in <code>FileHeader.catalog_roots[]</code> through <code>pgm_set_catalog_root()</code>.</li>
+<li>Inserts the default database <code>"evosql"</code>. It is assigned <code>db_id = 1</code>.</li>
+<li>Inserts the default schema <code>"default"</code> under database 1. It is assigned <code>schema_id = 1</code>.</li>
+<li>Inserts the default user <code>"admin"</code> with an empty password hash. The server's authentication layer sets the real PBKDF2-SHA256 hash on first startup.</li>
+</ol>
+
+<h3 id="subsequent-runs">Subsequent runs</h3>
+<p><code>cat_init()</code> loads the 8 root page numbers from <code>FileHeader.catalog_roots[]</code> into the in-memory <code>BTree2</code> handles. Data pages for each catalog tree are lazily allocated on the first insert after restart. This costs at most 8 pages, which is 32 KB of overhead.</p>
+
+<h3 id="shutdown">Shutdown</h3>
+<p><code>cat_shutdown()</code> calls <code>pgm_flush()</code> to write all dirty buffer pool pages to disk. It then resets all in-memory state.</p>
+
+<h2 id="api">API Reference</h2>
+
+<h3 id="api-lifecycle">Lifecycle</h3>
+<pre><code><span class="c-key">int</span>  <span class="c-fn">cat_init</span>(<span class="c-key">void</span>);       <span class="c-com">// Bootstrap or load catalog; call after pgm_init()</span>
+<span class="c-key">void</span> <span class="c-fn">cat_shutdown</span>(<span class="c-key">void</span>);   <span class="c-com">// Flush dirty pages, reset state</span></code></pre>
+
+<h3 id="api-database">Database Operations</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">cat_create_database</span>(<span class="c-key">const</span> <span class="c-key">char</span> *name);
+    <span class="c-com">// Returns db_id (>0) on success, -1 if name already exists.</span>
+
+<span class="c-key">int</span> <span class="c-fn">cat_find_database</span>(<span class="c-key">const</span> <span class="c-key">char</span> *name, <span class="c-fn">DatabaseDesc</span> *out);
+    <span class="c-com">// Returns 0 on success, -1 if not found. Pass NULL for out to check existence.</span>
+
+<span class="c-key">int</span> <span class="c-fn">cat_drop_database</span>(<span class="c-key">const</span> <span class="c-key">char</span> *name);
+    <span class="c-com">// Returns 0 on success, -1 if not found.</span>
+
+<span class="c-key">int</span> <span class="c-fn">cat_list_databases</span>(<span class="c-fn">DatabaseDesc</span> *out, <span class="c-key">int</span> max);
+    <span class="c-com">// Returns count of databases written to out[]. Full tree scan.</span></code></pre>
+
+<h3 id="api-schema">Schema Operations</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">cat_create_schema</span>(<span class="c-key">uint32_t</span> db_id, <span class="c-key">const</span> <span class="c-key">char</span> *name);
+    <span class="c-com">// Returns schema_id (>0) on success, -1 if duplicate.</span>
+
+<span class="c-key">int</span> <span class="c-fn">cat_find_schema</span>(<span class="c-key">uint32_t</span> db_id, <span class="c-key">const</span> <span class="c-key">char</span> *name, <span class="c-fn">SchemaDesc</span> *out);
+<span class="c-key">int</span> <span class="c-fn">cat_drop_schema</span>(<span class="c-key">uint32_t</span> db_id, <span class="c-key">const</span> <span class="c-key">char</span> *name);
+
+<span class="c-key">int</span> <span class="c-fn">cat_list_schemas</span>(<span class="c-key">uint32_t</span> db_id, <span class="c-fn">SchemaDesc</span> *out, <span class="c-key">int</span> max);
+    <span class="c-com">// Prefix scan on db_id. Returns only schemas belonging to the given database.</span></code></pre>
+
+<h3 id="api-table">Table Operations</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">cat_create_table</span>(<span class="c-key">uint32_t</span> schema_id, <span class="c-key">const</span> <span class="c-key">char</span> *name,
+                     <span class="c-key">const</span> <span class="c-fn">ColumnDesc</span> *cols, <span class="c-key">int</span> ncols,
+                     <span class="c-key">int</span> pad_size, <span class="c-key">int</span> auto_inc_col,
+                     <span class="c-key">int</span> auto_inc_start, <span class="c-key">int</span> auto_inc_step);
+    <span class="c-com">// Creates table descriptor, a primary-key B+ tree, and all column records.</span>
+    <span class="c-com">// Returns table_id (>0) on success, -1 on duplicate or error.</span>
+
+<span class="c-key">int</span> <span class="c-fn">cat_find_table</span>(<span class="c-key">uint32_t</span> schema_id, <span class="c-key">const</span> <span class="c-key">char</span> *name, <span class="c-fn">TableDesc</span> *out);
+
+<span class="c-key">int</span> <span class="c-fn">cat_drop_table</span>(<span class="c-key">uint32_t</span> table_id);
+    <span class="c-com">// Cascading delete: removes the table record plus all associated columns,</span>
+    <span class="c-com">// indexes, and constraints from the catalog. The caller is responsible for</span>
+    <span class="c-com">// destroying the PK B+ tree and freeing heap pages.</span>
+
+<span class="c-key">int</span> <span class="c-fn">cat_update_auto_inc</span>(<span class="c-key">uint32_t</span> table_id, <span class="c-key">const</span> <span class="c-key">char</span> *table_name,
+                        <span class="c-key">uint32_t</span> schema_id, <span class="c-key">int</span> new_counter);
+    <span class="c-com">// Updates auto_inc_counter in the table record. Attempts in-place slotted</span>
+    <span class="c-com">// page update; falls back to delete + re-insert if the record does not fit.</span>
+
+<span class="c-key">int</span> <span class="c-fn">cat_update_heap_page</span>(<span class="c-key">uint32_t</span> table_id, <span class="c-key">const</span> <span class="c-key">char</span> *table_name,
+                         <span class="c-key">uint32_t</span> schema_id, <span class="c-key">uint32_t</span> heap_page);
+    <span class="c-com">// Sets the heap_page field (called on first row insertion).</span>
+
+<span class="c-key">int</span> <span class="c-fn">cat_list_tables</span>(<span class="c-key">uint32_t</span> schema_id, <span class="c-fn">TableDesc</span> *out, <span class="c-key">int</span> max);
+    <span class="c-com">// Prefix scan on schema_id.</span></code></pre>
+
+<h3 id="api-column">Column Operations</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">cat_find_columns</span>(<span class="c-key">uint32_t</span> table_id, <span class="c-fn">ColumnDesc</span> *out, <span class="c-key">int</span> max);
+    <span class="c-com">// Prefix scan on table_id. Returns columns in ordinal order (guaranteed by</span>
+    <span class="c-com">// zero-padded ordinal in the B+ tree key). Returns count.</span></code></pre>
+<p>Columns are created as part of <code>cat_create_table</code>. They are deleted as part of <code>cat_drop_table</code>. There is no standalone column creation API.</p>
+
+<h3 id="api-index">Index Operations</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">cat_create_index</span>(<span class="c-key">uint32_t</span> table_id, <span class="c-key">const</span> <span class="c-key">char</span> *name,
+                     <span class="c-key">uint32_t</span> root_page, <span class="c-key">const</span> <span class="c-key">char</span> *col_list,
+                     <span class="c-key">char</span> index_type);
+    <span class="c-com">// index_type: 'P' primary, 'U' unique, 'N' normal.</span>
+
+<span class="c-key">int</span> <span class="c-fn">cat_find_index</span>(<span class="c-key">uint32_t</span> table_id, <span class="c-key">const</span> <span class="c-key">char</span> *name, <span class="c-fn">IndexDesc</span> *out);
+    <span class="c-com">// Direct key lookup (requires table_id).</span>
+
+<span class="c-key">int</span> <span class="c-fn">cat_find_index_by_name</span>(<span class="c-key">const</span> <span class="c-key">char</span> *name, <span class="c-fn">IndexDesc</span> *out);
+    <span class="c-com">// Full tree scan. Finds index by name alone, regardless of table.</span>
+
+<span class="c-key">int</span> <span class="c-fn">cat_list_indexes</span>(<span class="c-key">uint32_t</span> table_id, <span class="c-fn">IndexDesc</span> *out, <span class="c-key">int</span> max);
+    <span class="c-com">// Prefix scan on table_id.</span>
+
+<span class="c-key">int</span> <span class="c-fn">cat_drop_index</span>(<span class="c-key">uint32_t</span> table_id, <span class="c-key">const</span> <span class="c-key">char</span> *name);
+
+<span class="c-key">int</span> <span class="c-fn">cat_update_index_root</span>(<span class="c-key">uint32_t</span> table_id, <span class="c-key">const</span> <span class="c-key">char</span> *name,
+                          <span class="c-key">uint32_t</span> new_root_page);
+    <span class="c-com">// Updates root_page after B+ tree splits or merges change the root.</span></code></pre>
+
+<h3 id="api-constraint">Constraint Operations</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">cat_add_constraint</span>(<span class="c-key">uint32_t</span> table_id, <span class="c-key">char</span> type,
+                       <span class="c-key">const</span> <span class="c-key">char</span> *definition,
+                       <span class="c-key">uint32_t</span> ref_table_id, <span class="c-key">const</span> <span class="c-key">char</span> *ref_columns);
+    <span class="c-com">// type: 'C' check, 'F' foreign key, 'P' primary key, 'U' unique.</span>
+    <span class="c-com">// ref_table_id and ref_columns are used only for FK constraints (pass 0 and "" otherwise).</span>
+    <span class="c-com">// Ordinal is assigned from a global counter.</span>
+
+<span class="c-key">int</span> <span class="c-fn">cat_list_constraints</span>(<span class="c-key">uint32_t</span> table_id, <span class="c-fn">ConstraintDesc</span> *out, <span class="c-key">int</span> max);
+    <span class="c-com">// Prefix scan on table_id.</span></code></pre>
+
+<h3 id="api-user">User Operations</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">cat_create_user</span>(<span class="c-key">const</span> <span class="c-key">char</span> *username, <span class="c-key">const</span> <span class="c-key">char</span> *password_hash);
+<span class="c-key">int</span> <span class="c-fn">cat_find_user</span>(<span class="c-key">const</span> <span class="c-key">char</span> *username, <span class="c-fn">UserDesc</span> *out);
+<span class="c-key">int</span> <span class="c-fn">cat_update_user</span>(<span class="c-key">const</span> <span class="c-key">char</span> *username, <span class="c-key">const</span> <span class="c-key">char</span> *new_hash);
+<span class="c-key">int</span> <span class="c-fn">cat_drop_user</span>(<span class="c-key">const</span> <span class="c-key">char</span> *username);
+<span class="c-key">int</span> <span class="c-fn">cat_list_users</span>(<span class="c-fn">UserDesc</span> *out, <span class="c-key">int</span> max);   <span class="c-com">// Full tree scan.</span></code></pre>
+
+<h3 id="api-grant">Grant Operations</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">cat_create_grant</span>(<span class="c-key">const</span> <span class="c-key">char</span> *username, <span class="c-key">int</span> scope_type,
+                     <span class="c-key">const</span> <span class="c-key">char</span> *scope_name, <span class="c-key">const</span> <span class="c-key">char</span> *privileges,
+                     <span class="c-key">int</span> grant_option);
+    <span class="c-com">// scope_type: 1=DATABASE, 2=SCHEMA, 3=TABLE.</span>
+    <span class="c-com">// privileges: comma-separated list or "ALL".</span>
+
+<span class="c-key">int</span> <span class="c-fn">cat_find_grant</span>(<span class="c-key">const</span> <span class="c-key">char</span> *username, <span class="c-key">int</span> scope_type,
+                   <span class="c-key">const</span> <span class="c-key">char</span> *scope_name, <span class="c-fn">GrantDesc</span> *out);
+
+<span class="c-key">int</span> <span class="c-fn">cat_drop_grant</span>(<span class="c-key">const</span> <span class="c-key">char</span> *username, <span class="c-key">int</span> scope_type,
+                   <span class="c-key">const</span> <span class="c-key">char</span> *scope_name);
+
+<span class="c-key">int</span> <span class="c-fn">cat_list_grants_for_user</span>(<span class="c-key">const</span> <span class="c-key">char</span> *username, <span class="c-fn">GrantDesc</span> *out, <span class="c-key">int</span> max);
+    <span class="c-com">// Prefix scan on "username:".</span>
+
+<span class="c-key">int</span> <span class="c-fn">cat_drop_all_grants_for_user</span>(<span class="c-key">const</span> <span class="c-key">char</span> *username);
+    <span class="c-com">// Collects all grant keys for the user, then deletes them in a second pass</span>
+    <span class="c-com">// (cannot delete during a B+ tree cursor scan).</span></code></pre>
+
+<h3 id="api-resolve">Convenience Three-Level Resolution</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">cat_resolve_table</span>(<span class="c-key">const</span> <span class="c-key">char</span> *db_name, <span class="c-key">const</span> <span class="c-key">char</span> *schema_name,
+                      <span class="c-key">const</span> <span class="c-key">char</span> *table_name, <span class="c-fn">TableDesc</span> *out);</code></pre>
+<p>This performs a three-step lookup. First <code>cat_find_database</code>. Then <code>cat_find_schema</code> using <code>db.db_id</code>. Then <code>cat_find_table</code> using <code>schema.schema_id</code>. It returns 0 on success and -1 if any level fails. This is the primary entry point used by DML operations to resolve a table name to its descriptor. Those operations are SELECT, INSERT, UPDATE, and DELETE. See the <a href="/3.0/table-api-and-dml/">Table API and DML</a> page for how DML uses this descriptor.</p>
+
+<h2 id="storage-pattern">Internal Data Storage Pattern</h2>
+<p>All catalog operations follow the same create, find, and drop pattern internally.</p>
+
+<h3 id="pattern-create">Create</h3>
+<pre><code>1. Build composite B+ tree key from the input IDs and name.
+2. Check for duplicates via bt2_search (return -1 if key exists).
+3. Allocate an auto-increment ID via pgm_next_id().
+4. Populate the descriptor struct.
+5. Serialize the struct to a semicolon-delimited string.
+6. Insert the string into a slotted page via cat_store_record() → returns RowID.
+7. Insert (key → RowID) into the B+ tree via bt2_insert().</code></pre>
+
+<h3 id="pattern-find">Find</h3>
+<pre><code>1. Build key.
+2. bt2_search(key) → RowID.
+3. cat_read_record(RowID) → semicolon-delimited string.
+4. Deserialize string into the descriptor struct.</code></pre>
+
+<h3 id="pattern-list">List with prefix scan</h3>
+<pre><code>1. Build prefix (e.g., "0000000005:").
+2. bt2_cursor_seek(prefix) → position cursor at first matching key.
+3. Loop: bt2_cursor_next() → (key, RowID).
+4. Break when key no longer starts with the prefix.
+5. Read and deserialize each record.</code></pre>
+
+<h3 id="pattern-drop">Drop</h3>
+<pre><code>1. Build key.
+2. bt2_search(key) → RowID.
+3. cat_delete_record(RowID) marks slot as deleted on the slotted page.
+4. bt2_delete(key) removes entry from the B+ tree.</code></pre>
+
+<h3 id="pattern-update">Update with in-place or relocate</h3>
+<p>This applies to mutable fields such as <code>auto_inc_counter</code>, <code>heap_page</code>, and <code>root_page</code>.</p>
+<pre><code>1. bt2_search(key) → RowID.
+2. Read record, deserialize, modify field, re-serialize.
+3. Try slot_update() for in-place replacement on the same slotted page.
+4. If the updated record does not fit in the same slot:
+   a. Delete the record from the slotted page.
+   b. Insert the record on a (possibly different) slotted page → new RowID.
+   c. bt2_update(key, new_RowID) to point the B+ tree at the relocated record.</code></pre>
+
+<h2 id="slotted-pages">Slotted Page Management</h2>
+<p>Each of the 8 catalog trees keeps a current data page for new record insertions. The current page is held in <code>g_cat_data_pages[CatalogID]</code>. When <code>cat_store_record</code> is called, it does the following.</p>
+<ol>
+<li>If a current data page exists, it tries <code>slot_insert</code> on it.</li>
+<li>If the page is full, or no current page is set, it allocates a fresh <code>PAGE_DATA</code> page through <code>pgm_alloc_page</code>. It initializes the page with <code>slot_page_init</code>, inserts the record, and updates <code>g_cat_data_pages</code>.</li>
+</ol>
+<div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>After a server restart, all <code>g_cat_data_pages</code> entries reset to 0. The first insert into each catalog tree allocates a fresh data page. This can waste up to 8 pages, which is 32 KB, per restart. It avoids the complexity of scanning for partially-full data pages.</div></div>
+
+<h2 id="constants">Constants</h2>
+<pre><code><span class="c-key">#define</span> <span class="c-fn">CAT_MAX_COLUMNS</span>      <span class="c-str">64</span>     <span class="c-com">// max columns per table</span>
+<span class="c-key">#define</span> <span class="c-fn">CAT_MAX_NAME_LEN</span>    <span class="c-str">128</span>     <span class="c-com">// max identifier length</span>
+<span class="c-key">#define</span> <span class="c-fn">CAT_MAX_DEFAULT_LEN</span> <span class="c-str">256</span>     <span class="c-com">// max DEFAULT value string</span>
+<span class="c-key">#define</span> <span class="c-fn">CAT_MAX_HASH_LEN</span>    <span class="c-str">512</span>     <span class="c-com">// max password hash length</span>
+<span class="c-key">#define</span> <span class="c-fn">CAT_MAX_KEY_LEN</span>     <span class="c-str">255</span>     <span class="c-com">// matches BT2_MAX_KEY_LEN</span>
+<span class="c-key">#define</span> <span class="c-fn">CAT_MAX_RECORD_LEN</span>  <span class="c-str">2048</span>    <span class="c-com">// max serialized record size</span></code></pre>
+
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>EvolutionDB Wiki</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+ <h1>EvolutionDB Engine Wiki</h1>
+ <p class="lede">This wiki explains how the EvolutionDB engine works on the inside. It covers the storage layer, the indexes, the catalog, and the data flow. It describes the C code in <code>src/backend</code>. This wiki covers version <strong data-evodb-version></strong>.</p>
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>This wiki is about the engine only. It does not cover the agent, the SDKs, or the connectors. For SQL usage see the <a href="https://docs.evolutiondb.org">reference manual</a>. For the client libraries see the <a href="https://developer.evolutiondb.org">developer portal</a>.</div></div>
+ <h2 id="pages">Pages</h2>
+ <div class="card-grid">
+ <a class="doc-card" href="/3.0/unified-storage-overview/"><span class="material-symbols-outlined">account_tree</span><h3>Unified Storage Overview</h3><p>How the 4 KB page file, the buffer pool, and the storage components fit together.</p></a>
+ <a class="doc-card" href="/3.0/page-manager-and-slotted-pages/"><span class="material-symbols-outlined">grid_view</span><h3>Page Manager &amp; Slotted Pages</h3><p>Page allocation, the free list, and how variable-length records are stored in a page.</p></a>
+ <a class="doc-card" href="/3.0/bplus-tree/"><span class="material-symbols-outlined">park</span><h3>B+ Tree</h3><p>Node layout, search, insert, delete, splitting, and the leaf chain in btree2.</p></a>
+ <a class="doc-card" href="/3.0/system-catalog/"><span class="material-symbols-outlined">schema</span><h3>System Catalog</h3><p>The catalog B+ trees, the descriptor structs, and how metadata is stored.</p></a>
+ <a class="doc-card" href="/3.0/table-api-and-dml/"><span class="material-symbols-outlined">table</span><h3>Table API &amp; DML</h3><p>Heap CRUD, primary-key lookups, table scans, and how the DML commands use them.</p></a>
+ </div>
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

@@ -1,0 +1,796 @@
+{
+ "version": "3.0.0",
+ "channel": "3.0",
+ "pages": {
+  "bplus-tree": {
+   "title": "B+ Tree",
+   "sections": [
+    {
+     "id": "intro",
+     "heading": "Introduction",
+     "text": "B+ Tree EvoSQL uses a page-based B+ tree called btree2 for all O(log n) key-value indexing. Every primary key index, secondary index, and system catalog tree is a B+ tree instance. Keys are variable-length strings up to 255 bytes. Values are RowID structs that point to heap records."
+    },
+    {
+     "id": "overview",
+     "heading": "Overview",
+     "text": "EvoSQL uses a page-based B+ tree called btree2 for all O(log n) key-value indexing. Every primary key index, secondary index, and system catalog tree is a B+ tree instance. Keys are variable-length strings up to 255 bytes. Values are RowID structs that point to heap records. All tree nodes are stored as 4KB pages managed by the Page Manager. All I/O passes through the Clock Sweep buffer pool. The tree has these key properties. Key format. Length-prefixed string. It uses 1 byte for length plus up to 255 bytes of data. The limit is BT2_MAX_KEY_LEN = 255. Value format. A RowID { page_no: uint32_t, slot_idx: uint16_t }. This is 6 bytes. Numeric-aware comparison. Pure numeric strings are compared by numeric value, so \"2\" < \"10\". Non-numeric keys fall back to lexicographic order. Node capacity. About 4076 usable bytes per node. This is 4096 minus the 16-byte PageHeader minus the 4-byte NodeHeader. Deletion strategy. Deletion is lazy. Deleted entries have their RowID set to {0, 0}. The key slot is reused on re-insert of the same key. The BTree2 handle is a single struct that holds the root page number. typedef struct { uint32_t root_page; /* 0 = empty tree */ } BTree2;"
+    },
+    {
+     "id": "node-structure",
+     "heading": "Node Structure",
+     "text": "Every B+ tree node occupies exactly one 4KB page. The first 16 bytes are the standard PageHeader. A 4-byte NodeHeader follows. The key/pointer data area comes after that. The page type field in PageHeader distinguishes internal nodes from leaf nodes. Internal nodes use PAGE_BTREE_INT = 2. Leaf nodes use PAGE_BTREE_LEAF = 3."
+    },
+    {
+     "id": "node-header",
+     "heading": "NodeHeader",
+     "text": "typedef struct { uint16_t num_keys; /* number of keys stored in this node */ uint16_t flags; /* reserved, must be 0 */ } NodeHeader; The position within the page is fixed. Offset 0: PageHeader (16 bytes) Offset 16: NodeHeader (4 bytes) Offset 20: Key/pointer data area (4076 bytes)"
+    },
+    {
+     "id": "leaf-layout",
+     "heading": "Leaf Node Layout",
+     "text": "Leaf nodes store sorted key-RowID pairs. Each entry is a length-prefixed key followed by a 6-byte RowID. Leaf nodes are doubly linked through PageHeader.next_page and PageHeader.prev_page for sequential scans. ┌──────────────────────────────────────────────────────┐ │ PageHeader (16B) │ │ page_type = PAGE_BTREE_LEAF │ │ page_id, next_page (→ right leaf), prev_page │ ├──────────────────────────────────────────────────────┤ │ NodeHeader (4B) │ │ num_keys, flags │ ├──────────────────────────────────────────────────────┤ │ Entry 0: [klen:1B][key_data:klen B][RowID:6B] │ │ Entry 1: [klen:1B][key_data:klen B][RowID:6B] │ │ Entry 2: [klen:1B][key_data:klen B][RowID:6B] │ │ ... │ │ (entries sorted by key) │ │ │ │ ← free space → │ └──────────────────────────────────────────────────────┘ The entry overhead per key is 1 (length byte) + key_length + 6 (RowID). This equals 7 plus key_length bytes. For a typical 20-byte key, each entry is 27 bytes. That yields about 150 entries per leaf."
+    },
+    {
+     "id": "internal-layout",
+     "heading": "Internal Node Layout",
+     "text": "Internal nodes store separator keys interleaved with child page pointers. With N keys there are N+1 child pointers. The first child pointer precedes the first key. Each later key is followed by the child pointer for keys greater than or equal to that separator. ┌──────────────────────────────────────────────────────┐ │ PageHeader (16B) │ │ page_type = PAGE_BTREE_INT │ │ page_id │ ├──────────────────────────────────────────────────────┤ │ NodeHeader (4B) │ │ num_keys, flags │ ├──────────────────────────────────────────────────────┤ │ child0 (4B) │ │ [key0_len:1B][key0_data:N B] │ │ child1 (4B) │ │ [key1_len:1B][key1_data:N B] │ │ child2 (4B) │ │ ... │ │ childN (4B) │ │ │ │ ← free space → │ └──────────────────────────────────────────────────────┘ The entry overhead per key is 4 (child pointer) + 1 (length byte) + key_length bytes. There is also a trailing 4-byte child pointer at the end. For a typical 20-byte key, the fan-out is about 160 to 170 children per internal node. With this fan-out, a tree of depth 3 can index over 4 million keys."
+    },
+    {
+     "id": "leaf-chain",
+     "heading": "Leaf Chain (Doubly Linked)",
+     "text": "All leaf nodes are connected into a doubly linked list through PageHeader.next_page and PageHeader.prev_page. This enables efficient sequential and range scans. The engine does not need to traverse the tree from the root for each next-key lookup. ┌────────┐ ┌────────┐ ┌────────┐ ... ←────│ Leaf A │←───→│ Leaf B │←───→│ Leaf C │────→ ... │ prev=? │ │prev= A │ │prev= B │ │ next=B │ │next= C │ │ next=0 │ └────────┘ └────────┘ └────────┘"
+    },
+    {
+     "id": "operations",
+     "heading": "Key Operations",
+     "text": ""
+    },
+    {
+     "id": "bt2-create",
+     "heading": "bt2_create · Allocate Root Page",
+     "text": "int bt2_create(BTree2 *tree); This allocates a single page of type PAGE_BTREE_LEAF through pgm_alloc_page(). It initializes the page as an empty leaf node with num_keys = 0. It writes the page to disk and stores the page number in tree->root_page. It returns 0 on success and -1 on allocation failure. A tree with root_page == 0 is considered empty. bt2_insert() calls bt2_create() automatically if the root is 0, so explicit creation is optional."
+    },
+    {
+     "id": "bt2-insert",
+     "heading": "bt2_insert · Insert Key/RowID",
+     "text": "int bt2_insert(BTree2 *tree, const char *key, RowID rid); This inserts a key-RowID mapping into the tree. The key must not exceed BT2_MAX_KEY_LEN, which is 255 bytes. The return values are these. 0. Success. 1. Duplicate key. The key already exists with a non-deleted RowID. -1. Error. This means an allocation failure or a key that is too long. The algorithm runs in these steps. If the tree is empty with root_page == 0, create a root leaf automatically. Call insert_recursive() starting at the root page. The recursive function descends through internal nodes to the correct leaf. At the leaf, it does the following work. Scan entries to find the sorted insertion position. If the key already exists with a deleted RowID of {0, 0}, reuse the slot by overwriting the RowID. Return 0. If the key exists with a live RowID, return 1 for duplicate. If the entry fits in the leaf's free space, shift later entries right and write the entry. Return 0. If the leaf is full, perform a leaf split. See Tree Splitting. If a split propagated up and the root itself split, allocate a new root internal node. The new root holds the separator key and two children. These are the old root and the new sibling."
+    },
+    {
+     "id": "bt2-search",
+     "heading": "bt2_search · Exact Key Lookup",
+     "text": "int bt2_search(BTree2 *tree, const char *key, RowID *out_rid); This searches for an exact key match. It descends from the root through internal nodes using find_leaf(). Then it performs a linear scan of the leaf's entries. The return values are these. 0. Found. The RowID is written to *out_rid. -1. Not found. This also covers a key that exists but is marked deleted with RowID == {0, 0}. The descent logic in find_leaf works as follows. At each internal node it scans separator keys from left to right. It follows child[i] where i is the index of the first separator key greater than the search key. If no separator is greater, it follows the rightmost child."
+    },
+    {
+     "id": "bt2-delete",
+     "heading": "bt2_delete · Logical Delete",
+     "text": "int bt2_delete(BTree2 *tree, const char *key); This performs a lazy logical delete. It descends to the leaf that contains the key. It overwrites the entry's RowID with the sentinel value {0, 0}. The key bytes stay in the leaf. The slot is reused if the same key is re-inserted. The return values are these. 0. Success. -1. The key was not found, or it was already deleted. No merging or rebalancing is performed. This keeps the implementation simple. It avoids the complexity of B+ tree node merges. Over time, leaves may accumulate deleted entries. Re-inserts of the same key reclaim those slots."
+    },
+    {
+     "id": "bt2-update",
+     "heading": "bt2_update · Update RowID for Existing Key",
+     "text": "int bt2_update(BTree2 *tree, const char *key, RowID new_rid); This finds the leaf entry for the given key. It overwrites its RowID with new_rid. This is used when a heap record moves to a different page. For example, an UPDATE that changes record size moves the record. The index must then point to the record's updated location. The return values are these. 0. Success. -1. The key was not found. infobt2_update() does not check whether the existing RowID is deleted. It unconditionally overwrites the RowID. This means it can also undelete an entry by writing a valid RowID over a {0, 0} sentinel."
+    },
+    {
+     "id": "bt2-destroy",
+     "heading": "bt2_destroy · Recursive Page Freeing",
+     "text": "void bt2_destroy(BTree2 *tree); This recursively frees every page in the tree by walking the tree depth-first. At each internal node it recurses into all children before freeing the node's own page through pgm_free_page(). Leaf pages are freed directly. After completion, tree->root_page is set to 0. This is used by DROP TABLE and DROP INDEX to reclaim all storage."
+    },
+    {
+     "id": "cursor",
+     "heading": "Cursor API",
+     "text": "The cursor API provides sequential iteration over the B+ tree's leaf chain. It supports full scans and prefix-based range scans. typedef struct { uint32_t cur_page; /* current leaf page (0 = exhausted) */ uint16_t cur_idx; /* current key index within leaf */ } BTree2Cursor;"
+    },
+    {
+     "id": "cursor-first",
+     "heading": "bt2_cursor_first · Position at Smallest Key",
+     "text": "int bt2_cursor_first(BTree2 *tree, BTree2Cursor *cur); This descends to the leftmost leaf by always following child[0] at each internal node. It sets the cursor to the first non-deleted entry. If all entries in the first leaf are deleted, it follows next_page to find the first active entry. It returns 0 on success. It returns -1 if the tree is empty or contains only deleted entries."
+    },
+    {
+     "id": "cursor-next",
+     "heading": "bt2_cursor_next · Advance to Next Entry",
+     "text": "int bt2_cursor_next(BTree2Cursor *cur, char *key_out, RowID *rid_out); This returns the current entry's key and RowID, then advances the cursor. The key is null-terminated and at most BT2_MAX_KEY_LEN + 1 bytes. It automatically skips deleted entries with RowID {0, 0}. It follows the leaf chain when the current leaf is exhausted. It returns 0 on success. It returns -1 when no more entries remain. The typical iteration pattern looks like this. BTree2Cursor cur; bt2_cursor_first(&tree, &cur); char key[BT2_MAX_KEY_LEN + 1]; RowID rid; while (bt2_cursor_next(&cur, key, &rid) == 0) { // process key, rid }"
+    },
+    {
+     "id": "cursor-seek",
+     "heading": "bt2_cursor_seek · Position at Key or First Key >= Key",
+     "text": "int bt2_cursor_seek(BTree2 *tree, const char *key, BTree2Cursor *cur); This descends to the leaf that contains the given key. It uses the same find_leaf() logic as bt2_search. Then it scans the leaf to find the first entry whose key is greater than or equal to the search key. If all keys in the leaf are smaller, it follows next_page. This is the primary mechanism for prefix-based range scans. The system catalog uses composite keys with zero-padded IDs such as \"0000000001:tablename\". A call to bt2_cursor_seek(\"0000000001:\") positions the cursor at the first entry for table ID 1. Iteration continues with bt2_cursor_next() until the prefix no longer matches. It returns 0 on success. It returns -1 if no key greater than or equal to the search key exists."
+    },
+    {
+     "id": "splitting",
+     "heading": "Tree Splitting",
+     "text": "When a leaf or internal node runs out of space during insertion, the node is split into two siblings. A separator key is promoted to the parent. If the parent is also full, the split propagates upward recursively. If the root itself splits, a new root is created. This increases the tree height by one."
+    },
+    {
+     "id": "leaf-split",
+     "heading": "Leaf Split",
+     "text": "The insertion target leaf is full. Used bytes plus entry size is greater than 4076. A temporary oversized buffer is created. The new entry is inserted at its sorted position. The entries are divided at the midpoint with mid = total_keys / 2. Entries [0, mid) stay in the original page. Entries [mid, total) are copied to a newly allocated leaf page. The leaf chain is updated as follows. New leaf's next_page = old leaf's former next_page. New leaf's prev_page = old leaf's page_id. Old leaf's next_page = new leaf's page_id. If a leaf existed after the old leaf, its prev_page is updated to point to the new leaf. The separator key, which is the first key of the new leaf, is promoted to the parent. BEFORE (leaf full, inserting \"F\"): ┌────────────────────────────────────────┐ │ Leaf: [A][B][C][D][E][G][H] (FULL) │ └────────────────────────────────────────┘ AFTER (split at midpoint, \"E\" promoted): separator = \"E\" │ ▼ ┌──── parent receives (\"E\", ptr→new leaf) ────┐ │ │ ▼ ▼ ┌─────────────────┐ next ┌─────────────────┐ │ [A][B][C][D] │──────────→│ [E][F][G][H] │ │ Old Leaf │←──────────│ New Leaf │ └─────────────────┘ prev └─────────────────┘"
+    },
+    {
+     "id": "internal-split",
+     "heading": "Internal Node Split",
+     "text": "The internal node is full. It cannot fit the new separator key plus child pointer. A temporary oversized buffer is created. The new separator is inserted at its correct position. The entries are divided at the midpoint. The middle key is not kept in either sibling. It is promoted to the parent. Keys [0, mid) and children [0, mid] stay in the original node. The key at index mid is sent up to the parent. Keys [mid+1, total) and children [mid+1, total] go to the new internal node. BEFORE (internal node full, inserting separator \"M\"): ┌─────────────────────────────────────────────────┐ │ Internal: [ptr0] D [ptr1] G [ptr2] J [ptr3] │ │ K [ptr4] P [ptr5] S [ptr6] (FULL) │ └─────────────────────────────────────────────────┘ AFTER (split, \"K\" promoted to parent): \"K\" promoted │ ▼ ┌──── parent receives (\"K\", ptr→right) ────┐ │ │ ▼ ▼ ┌────────────────────────┐ ┌────────────────────────┐ │ [ptr0] D [ptr1] G │ │ [ptr3] M [ptr4] P │ │ [ptr2] J [ptr3] │ │ [ptr5] S [ptr6] │ │ Left (original) │ │ Right (new) │ └────────────────────────┘ └────────────────────────┘"
+    },
+    {
+     "id": "root-split",
+     "heading": "Root Split",
+     "text": "When the current root splits, bt2_insert() allocates a new internal node as the root. This new root has exactly one separator key. It has two children, which are the old root and its new sibling. It becomes the new tree->root_page. This is the only operation that increases the tree's height. BEFORE: root (leaf or internal, now split) │ ┌─────┴─────┐ old_root new_sibling AFTER: new_root / │ \\ child0 \"sep\" child1 │ │ old_root new_sibling"
+    },
+    {
+     "id": "sentinel",
+     "heading": "Sentinel RowID",
+     "text": "The RowID value {page_no = 0, slot_idx = 0} is the universal deleted sentinel. Page 0 is always the file header and can never contain user data. This value is therefore guaranteed to be invalid as a record pointer. The sentinel behaves like this across the API. OperationBehavior bt2_search()Returns -1 for not found if the matching entry has RowID {0, 0} bt2_delete()Writes {0, 0} over the entry's RowID bt2_insert()If a key exists with RowID {0, 0}, reuses the slot and writes the live RowID bt2_cursor_next()Silently skips entries with RowID {0, 0} bt2_cursor_first()Skips leading deleted entries and advances to the next leaf if needed"
+    },
+    {
+     "id": "key-comparison",
+     "heading": "Key Comparison",
+     "text": "The key_cmp() function implements numeric-aware comparison. It works in these steps. Attempt to parse both keys as floating-point numbers with strtod. If both parse successfully with no trailing characters, compare numerically. Otherwise, fall back to lexicographic comparison. This uses memcmp with length tie-breaking. This ensures that numeric primary keys sort naturally, so \"2\" < \"10\" rather than \"10\" < \"2\". String keys retain standard dictionary order."
+    },
+    {
+     "id": "max-key-length",
+     "heading": "Max Key Length",
+     "text": "The maximum key length is 255 bytes through BT2_MAX_KEY_LEN. This is constrained by the 1-byte length prefix used in the node entry format. bt2_insert() rejects keys longer than this limit with a return value of -1. In practice, keys are much shorter. Primary key indexes. The string representation of column values. This is typically 5 to 40 bytes. System catalog composite keys. Zero-padded 10-digit IDs with a : separator. For example \"0000000001:users\" is 17 bytes. Secondary index keys. The column value concatenated with the primary key for uniqueness."
+    },
+    {
+     "id": "usage",
+     "heading": "Usage",
+     "text": "The B+ tree is the sole indexing structure in EvoSQL. Every index is a BTree2 instance. This holds for user tables and for internal metadata."
+    },
+    {
+     "id": "usage-catalog",
+     "heading": "System Catalog",
+     "text": "The system catalog uses 8 B+ trees for all metadata. They are stored in FileHeader.catalog_roots[]. CatalogIDTreePurpose CAT_SYS_DATABASESDatabasesDatabase name to database record CAT_SYS_SCHEMASSchemasdb_id:schema_name to schema record CAT_SYS_TABLESTablesschema_id:table_name to table record CAT_SYS_COLUMNSColumnstable_id:ordinal to column record CAT_SYS_INDEXESIndexestable_id:index_name to index record CAT_SYS_CONSTRAINTSConstraintstable_id:constraint_name to constraint record CAT_SYS_USERSUsersUsername to user record CAT_SYS_GRANTSGrantsGrant key to privilege record Catalog trees use composite keys with zero-padded IDs and : separators. bt2_cursor_seek() with a prefix like \"0000000005:\" enables efficient iteration over all entries that belong to a specific parent. For example it can iterate over all columns of table 5."
+    },
+    {
+     "id": "usage-pk",
+     "heading": "Primary Key Indexes",
+     "text": "Every table with a primary key has an associated B+ tree. The key is the string representation of the primary key column values. The RowID points to the heap page and slot where the full record is stored. INSERT checks for duplicates through bt2_search() before inserting. SELECT ... WHERE pk = value uses bt2_search() for O(log n) point lookups. See Table API and DML."
+    },
+    {
+     "id": "usage-secondary",
+     "heading": "Secondary Indexes",
+     "text": "Secondary indexes created through CREATE INDEX are also B+ trees. Index.c populates the tree by scanning the table's heap pages with tapi_scan and inserting one entry per row."
+    }
+   ]
+  },
+  "index": {
+   "title": "EvolutionDB Wiki",
+   "sections": [
+    {
+     "id": "intro",
+     "heading": "Introduction",
+     "text": "EvolutionDB Engine Wiki This wiki explains how the EvolutionDB engine works on the inside. It covers the storage layer, the indexes, the catalog, and the data flow. It describes the C code in src/backend. This wiki covers version . infoThis wiki is about the engine only. It does not cover the agent, the SDKs, or the connectors. For SQL usage see the reference manual. For the client libraries see the developer portal."
+    },
+    {
+     "id": "pages",
+     "heading": "Pages",
+     "text": "account_tree"
+    },
+    {
+     "id": "",
+     "heading": "Unified Storage Overview",
+     "text": "How the 4 KB page file, the buffer pool, and the storage components fit together. grid_view"
+    },
+    {
+     "id": "",
+     "heading": "Page Manager & Slotted Pages",
+     "text": "Page allocation, the free list, and how variable-length records are stored in a page. park"
+    },
+    {
+     "id": "",
+     "heading": "B+ Tree",
+     "text": "Node layout, search, insert, delete, splitting, and the leaf chain in btree2. schema"
+    },
+    {
+     "id": "",
+     "heading": "System Catalog",
+     "text": "The catalog B+ trees, the descriptor structs, and how metadata is stored. table"
+    },
+    {
+     "id": "",
+     "heading": "Table API & DML",
+     "text": "Heap CRUD, primary-key lookups, table scans, and how the DML commands use them."
+    }
+   ]
+  },
+  "page-manager-and-slotted-pages": {
+   "title": "Page Manager and Slotted Pages",
+   "sections": [
+    {
+     "id": "intro",
+     "heading": "Introduction",
+     "text": "Page Manager and Slotted Pages EvoSQL keeps all data in one global binary file made of fixed-size 4KB pages. The Page Manager owns this file and handles startup, page allocation, page free, and raw I/O. Slotted Pages store variable-length records inside a single data page using a slot directory layout. The global file holds every database, table, index, and the system catalog. The Page Manager lives in page_mgr.h and page_mgr.c. It owns the file. It handles initialization, page allocation and free, and raw I/O. Slotted Pages live in slotted.h and slotted.c. They provide variable-length record storage inside individual data pages. All disk I/O flows through the Clock Sweep buffer pool in buffer_pool.c. The page manager never calls read() or write() directly. It uses bp_read() and bp_write() instead. Source files: evolution/db/page_mgr.h, evolution/db/page_mgr.c evolution/db/slotted.h, evolution/db/slotted.c tests/test_page_mgr.c (unit tests)"
+    },
+    {
+     "id": "page-manager",
+     "heading": "Page Manager",
+     "text": ""
+    },
+    {
+     "id": "file-structure",
+     "heading": "File Structure",
+     "text": "The global storage file is a sequence of 4096-byte pages. Page 0 is always the File Header. All remaining pages are available for allocation. When the server starts, pgm_init() opens the existing file or creates a fresh one. When it opens an existing file, it validates the magic number and the page size. When it creates a fresh file, it makes 64 pages, which is 256KB. Page 0 Page 1 Page 2 Page N-1 ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ │FileHeader│ │ Data / │ │ Data / │ ... │ Data / │ │ (4096 B) │ │ Free / │ │ Free / │ │ Free / │ │ │ │ BTree │ │ BTree │ │ BTree │ └──────────┘ └──────────┘ └──────────┘ └──────────┘"
+    },
+    {
+     "id": "constants",
+     "heading": "Constants",
+     "text": "ConstantValueDescription EVO_MAGIC0x45564F44Magic number (ASCII \"EVOD\") EVO_FILE_VERSION1File format version EVO_PAGE_SIZE4096Page size in bytes PAGE_HEADER_SIZE16Common page header size PAGE_USABLE4080Usable bytes per page (EVO_PAGE_SIZE - PAGE_HEADER_SIZE) PGM_INITIAL_PAGES64Pages in a newly created file (256KB) PGM_GROW_MIN16Minimum number of pages added when growing the file"
+    },
+    {
+     "id": "page-header",
+     "heading": "Common Page Header",
+     "text": "Every page in the file begins with a 16-byte header. typedef struct { uint8_t page_type; /* PageType enum */ uint8_t flags; /* reserved, must be 0 */ uint16_t free_space; /* bytes of free space on this page */ uint32_t page_id; /* this page's own number (self-check) */ uint32_t next_page; /* free list chain or B+ leaf chain */ uint32_t prev_page; /* B+ tree leaf backward pointer */ } PageHeader; /* 16 bytes */ The page_type field uses one of five values. typedef enum { PAGE_FREE = 0, /* available for allocation */ PAGE_DATA = 1, /* slotted page for row storage */ PAGE_BTREE_INT = 2, /* B+ tree internal node */ PAGE_BTREE_LEAF = 3, /* B+ tree leaf node */ PAGE_OVERFLOW = 4 /* overflow for large records */ } PageType; The next_page field has two jobs. On free pages it chains into the free list. On B+ tree leaf pages it links to the next leaf in key order. The prev_page field links B+ tree leaves backward."
+    },
+    {
+     "id": "file-header",
+     "heading": "File Header (Page 0)",
+     "text": "Page 0 holds the global file header. It takes up an entire page. A reserved array pads it to fill exactly EVO_PAGE_SIZE bytes. #define CATALOG_ROOT_SLOTS 16 typedef struct { uint32_t magic; /* EVO_MAGIC */ uint16_t version; /* EVO_FILE_VERSION */ uint16_t page_size; /* EVO_PAGE_SIZE (4096) */ uint32_t total_pages; /* total pages in file */ uint32_t free_list_head; /* first free page (0 = none) */ uint32_t catalog_roots[CATALOG_ROOT_SLOTS]; /* root pages for system catalog trees */ uint32_t next_table_id; /* auto-increment counter */ uint32_t next_schema_id; /* auto-increment counter */ uint32_t next_db_id; /* auto-increment counter */ uint8_t reserved[EVO_PAGE_SIZE - 92]; /* pad to full page */ } FileHeader; The fixed fields sum to exactly 92 bytes. The math is 4 + 2 + 2 + 4 + 4 + (16 * 4) + 4 + 4 + 4 = 92. The reserved array takes the remaining bytes. That is 4096 - 92 = 4004 bytes. Catalog root slots store the root page number of each system catalog B+ tree. The engine defines eight catalog IDs. typedef enum { CAT_SYS_DATABASES = 0, CAT_SYS_SCHEMAS = 1, CAT_SYS_TABLES = 2, CAT_SYS_COLUMNS = 3, CAT_SYS_INDEXES = 4, CAT_SYS_CONSTRAINTS = 5, CAT_SYS_USERS = 6, CAT_SYS_GRANTS = 7, CAT_MAX = 8 } CatalogID; Slots 8 through 15 are reserved for future use. Auto-increment counters give globally unique IDs. They are next_table_id, next_schema_id, and next_db_id. They start at 1 in a fresh file. They are incremented atomically through pgm_next_id()."
+    },
+    {
+     "id": "initialization",
+     "heading": "Initialization",
+     "text": "pgm_init(filepath) is called once at server startup. It runs after the buffer pool has been initialized with bp_init(). It follows this logic. If the file already exists, open it and read page 0. Validate that magic == EVO_MAGIC and page_size == EVO_PAGE_SIZE. If validation fails, return an error. If the file does not exist (ENOENT), create it with O_RDWR | O_CREAT | O_TRUNC. Extend it to PGM_INITIAL_PAGES * EVO_PAGE_SIZE bytes through ftruncate(). Write the initial FileHeader to page 0. Then chain pages 1 through PGM_INITIAL_PAGES - 1 into the free list. If it is already initialized, this is a re-entrant call. Return immediately. pgm_shutdown() flushes any dirty file header. It calls bp_flush_all() to write all dirty buffer pool pages to disk. Then it closes the file descriptor."
+    },
+    {
+     "id": "page-allocation",
+     "heading": "Page Allocation",
+     "text": "pgm_alloc_page(page_type) pops a page from the head of the free list. If free_list_head == 0, the list is empty. Grow the file first. Read the page at free_list_head. Extract next_page from its header. This becomes the new free_list_head. Zero-fill the page buffer. Set page_type to the requested type. Write it back through the buffer pool. Flush the updated file header. Return the allocated page number. A return value of 0 indicates an error. Page 0 is never allocatable."
+    },
+    {
+     "id": "page-deallocation",
+     "heading": "Page Deallocation",
+     "text": "pgm_free_page(page_no) prepends the page to the free list. Refuse to free page 0. It is always the file header. Zero-fill the page. Set page_type = PAGE_FREE. Set next_page to the current free_list_head. Write the page through the buffer pool. Update free_list_head to point to this page. Flush the file header. The free list is a singly-linked chain through PageHeader.next_page. FileHeader Page 7 Page 3 Page 12 ┌────────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ │free_list │ │PAGE_FREE │ │PAGE_FREE │ │PAGE_FREE │ │ _head = 7 ─┼──────────>│next = 3 ─┼────>│next = 12─┼────>│next = 0 │ └────────────┘ └──────────┘ └──────────┘ └──────────┘ (end of list)"
+    },
+    {
+     "id": "file-growth",
+     "heading": "File Growth",
+     "text": "When pgm_alloc_page() finds the free list empty, the internal grow_file() function extends the file. Compute the growth amount. It is 50% of the current total_pages. It is at least PGM_GROW_MIN, which is 16 pages. Call ftruncate() to extend the file to the new size. Chain all newly created pages into the free list through chain_free_pages(). Each page is zero-filled with page_type = PAGE_FREE and linked to the next. The last page in the batch points to the previous free_list_head. Update total_pages and free_list_head in the file header."
+    },
+    {
+     "id": "raw-io",
+     "heading": "Raw Page I/O",
+     "text": "int pgm_read_page(uint32_t page_no, void *buf); int pgm_write_page(uint32_t page_no, const void *buf); These are thin wrappers over bp_read() and bp_write(). They compute the byte offset as page_no * EVO_PAGE_SIZE. They transfer a full 4096-byte page through the buffer pool. They return 0 on success and -1 on error. The buffer must be at least EVO_PAGE_SIZE bytes. pgm_flush() writes the file header if it is dirty. It then calls bp_flush_all() to force all cached pages to disk."
+    },
+    {
+     "id": "catalog-roots",
+     "heading": "Catalog Root Management",
+     "text": "uint32_t pgm_get_catalog_root(CatalogID id); void pgm_set_catalog_root(CatalogID id, uint32_t page_no); These read and write entries in the catalog_roots[] array of the file header. A system catalog B+ tree is created for the first time. Its root page number is stored here. This lets the engine find it on later startups. Setting a root flushes the header right away. The system catalog itself is described on the System Catalog page."
+    },
+    {
+     "id": "auto-increment",
+     "heading": "Auto-Increment IDs",
+     "text": "uint32_t pgm_next_id(int id_type); /* 0 = table, 1 = schema, 2 = database */ This returns the current value and increments the counter atomically. The file header is flushed after each call. This makes the change durable."
+    },
+    {
+     "id": "thread-safety",
+     "heading": "Thread Safety",
+     "text": "A single pthread_mutex_t named g_pgm_lock serializes all page manager operations. This covers allocation, free, catalog root access, and ID generation. Raw I/O does not acquire the page manager mutex. pgm_read_page and pgm_write_page rely on the buffer pool's own mutex for thread safety."
+    },
+    {
+     "id": "global-state",
+     "heading": "Global State",
+     "text": "The page manager is a singleton. It maintains four pieces of state. g_global_fd is the file descriptor for the global storage file. g_header is the in-memory copy of the FileHeader, which is page 0. g_header_dirty is a flag for unsaved header changes. g_pgm_lock is the mutex for thread safety. The file descriptor is exposed through pgm_get_fd(). This is for callers that need direct buffer pool access."
+    },
+    {
+     "id": "api-summary",
+     "heading": "Complete API Summary",
+     "text": "/* Lifecycle */ int pgm_init(const char *filepath); void pgm_shutdown(void); /* Page allocation */ uint32_t pgm_alloc_page(uint8_t page_type); void pgm_free_page(uint32_t page_no); /* Raw page I/O */ int pgm_read_page(uint32_t page_no, void *buf); int pgm_write_page(uint32_t page_no, const void *buf); void pgm_flush(void); /* Catalog roots */ uint32_t pgm_get_catalog_root(CatalogID id); void pgm_set_catalog_root(CatalogID id, uint32_t page_no); /* Auto-increment IDs */ uint32_t pgm_next_id(int id_type); /* Utility */ int pgm_get_fd(void);"
+    },
+    {
+     "id": "slotted-pages",
+     "heading": "Slotted Pages",
+     "text": "Slotted pages manage variable-length records inside a single 4KB page. The design follows a classic database textbook layout. A slot directory grows forward from the top of the page. Record data grows backward from the bottom. This gives stable record addressing through slot indices even as records are inserted and deleted."
+    },
+    {
+     "id": "page-layout",
+     "heading": "Page Layout",
+     "text": "Byte 0 Byte 4095 ┌──────────────┬───────────────┬────────┬────────┬─ ─┬──────────┐ │ PageHeader │ SlottedHeader │ Slot 0 │ Slot 1 │ .. │ │ │ (16 B) │ (6 B) │ (4 B) │ (4 B) │ │ │ ├──────────────┴───────────────┴────────┴────────┴─ ─┤ │ │ │ │ │ FREE SPACE │ │ │ │ │ │ <── free_offset free_end ──> │ │ ├──────────────────────────────────────────────────────┤ │ │ │ Record 1 │ Record 0 │ │ │ │ (var) │ (var) │ │ └──────────────┴──────────┴──────────┴────────────────────────────┘ Slot directory grows FORWARD (toward higher offsets) ──────> Record area grows BACKWARD (toward lower offsets) <────── When a slotted page is initialized through slot_page_init(), three values are set. free_offset = PAGE_HEADER_SIZE + SLOTTED_HEADER_SIZE = byte 22, just past the slotted header. free_end = EVO_PAGE_SIZE = byte 4096, the end of the page. Free space = 4096 - 22 = 4074 bytes, before any slots are allocated. The free space is the gap between free_offset and free_end. The free_offset marks the end of the slot directory. The free_end marks the start of the record area. As slots are added, free_offset advances forward by 4 bytes each. As records are placed, free_end retreats backward by the record size."
+    },
+    {
+     "id": "slotted-header",
+     "heading": "SlottedHeader",
+     "text": "typedef struct { uint16_t num_slots; /* total slot entries (including deleted) */ uint16_t free_offset; /* byte offset of first free byte after slot directory */ uint16_t free_end; /* byte offset where next record will be placed */ } SlottedHeader; /* 6 bytes */ num_slots counts all slots ever created on this page. This includes slots marked as deleted. It only grows. It never shrinks. free_offset tracks the end of the slot directory. It equals PAGE_HEADER_SIZE + SLOTTED_HEADER_SIZE + (num_slots * SLOT_ENTRY_SIZE) when no deleted slots have been reused. free_end tracks the beginning of the record region. Records are placed just below this offset. Then free_end is decremented."
+    },
+    {
+     "id": "slot-entry",
+     "heading": "Slot Entry",
+     "text": "typedef struct { uint16_t offset; /* byte offset of record within page (0 = deleted) */ uint16_t length; /* record length in bytes */ } SlotEntry; /* 4 bytes */ A slot with offset == 0 is treated as deleted or empty. This works because byte 0 is taken by the PageHeader. No valid record can start there. Slot entries are stored one after another starting at byte 22. That is after the PageHeader and the SlottedHeader. Slot i is at byte offset 22 + (i * 4)."
+    },
+    {
+     "id": "rowid",
+     "heading": "RowID",
+     "text": "typedef struct { uint32_t page_no; uint16_t slot_idx; } RowID; /* 6 bytes */ A RowID uniquely identifies any record in the storage file. The pair of page number and slot index is stable across compaction. Slot indices are never renumbered. A RowID with page_no == 0 is the \"deleted\" sentinel. Page 0 is always the file header and never stores records."
+    },
+    {
+     "id": "max-record",
+     "heading": "Maximum Record Size",
+     "text": "#define SLOT_MAX_RECORD (EVO_PAGE_SIZE - PAGE_HEADER_SIZE - SLOTTED_HEADER_SIZE - SLOT_ENTRY_SIZE) This evaluates to 4096 - 16 - 6 - 4 = 4070 bytes. A record of this size would use the entire page. That is one slot entry plus the record data. It leaves zero free space."
+    },
+    {
+     "id": "record-operations",
+     "heading": "Record Operations",
+     "text": "Insert (slot_insert) int slot_insert(void *page_buf, const void *record, uint16_t rec_len); It returns the slot index on success. It returns -1 if the record does not fit. The algorithm runs as follows. Reject zero-length records. Reject records larger than SLOT_MAX_RECORD. Scan the slot directory for a deleted slot. A deleted slot has offset == 0 and length == 0. If one is found, reuse it. No new slot overhead is needed. Calculate the space required. That is rec_len bytes for the record. Add 4 bytes for a new slot entry if a deleted slot is not being reused. If the contiguous free gap (free_end - free_offset) is too small, try slot_compact() to defragment the page. If it is still not enough, return -1. Place the record at free_end - rec_len and update free_end. Write the slot entry. It is either the reused slot or a newly appended entry in the directory. Update PageHeader.free_space. Read (slot_read) int slot_read(const void *page_buf, uint16_t slot_idx, void *out_buf, uint16_t out_size); It returns the actual record length on success. It returns -1 if the slot index is out of range or the slot is deleted. It copies at most out_size bytes into out_buf. If the record is larger than out_size, it is truncated. The full length is still returned. The caller can then allocate a larger buffer and retry. Delete (slot_delete) int slot_delete(void *page_buf, uint16_t slot_idx); It returns 0 on success. It returns -1 if the slot is already deleted or out of range. Check if the record being deleted is the physically last record. That is when se->offset == free_end. If so, advance free_end by se->length to reclaim the space right away. Mark the slot as deleted. Set offset = 0 and length = 0. Update PageHeader.free_space. Records that are not physically last leave a gap. This is fragmentation. slot_compact() reclaims this space. Update (slot_update) int slot_update(void *page_buf, uint16_t slot_idx, const void *new_record, uint16_t new_len); It returns 0 on success. It returns -1 if the record does not fit. If new_len <= old_length, the record is overwritten in place. If it is shorter than the original, the tail bytes become wasted space. Compaction can reclaim them. The slot's length is updated to new_len. If new_len > old_length, the function returns -1. The caller must do a delete-then-insert. This may land on a different page if the current page lacks space. The table API layer uses this overflow handling pattern. See Table API and DML."
+    },
+    {
+     "id": "free-space",
+     "heading": "Free Space Management",
+     "text": "Contiguous Free Space slot_free_space() returns the contiguous gap between the end of the slot directory and the start of the record area. uint16_t slot_free_space(const void *page_buf); // Returns: free_end - free_offset (or 0 if they've crossed) This is the maximum amount of data that can be stored without compaction. Inserting a record consumes record bytes. It may also consume 4 bytes for a new slot entry. Fragmentation Fragmentation happens in two cases. A record in the middle of the record area is deleted. This leaves a gap. A record is updated to a shorter length. This leaves unused tail bytes. These gaps reduce the effective capacity of the page. They do not reduce the value returned by slot_free_space(). That value only measures the contiguous gap. Compaction reclaims this space. Compaction (slot_compact) void slot_compact(void *page_buf); It defragments the record area. It repacks all active records toward the end of the page and removes gaps. Allocate a temporary buffer. Walk all slots in order. For each active slot that is not deleted, copy its record to the temporary buffer. Pack records from the end of the page backward. Copy the compacted records back into the page buffer. Update each slot's offset to its new position. Update free_end to reflect the new start of the record area. infoCompaction preserves slot indices. It never renumbers slots. It never removes deleted slot entries from the directory. This matters because external references point to specific slot indices. Those references include B+ tree leaf entries and RowIDs. Compaction is triggered automatically by slot_insert(). This happens when the contiguous free gap is too small but the page has enough total free space once fragmented gaps are counted."
+    },
+    {
+     "id": "active-count",
+     "heading": "Active Record Count",
+     "text": "uint16_t slot_active_count(const void *page_buf); It returns the number of slots that are not deleted. It scans the directory and counts entries where offset != 0."
+    },
+    {
+     "id": "caller-responsibilities",
+     "heading": "Caller Responsibilities",
+     "text": "All slotted page functions work on an in-memory page buffer. They do not read from or write to disk. The caller must do two things. Read the page into a buffer through pgm_read_page() before operating on it. Call pgm_write_page() after modifying the page. This persists changes through the buffer pool. This design gives callers full control over I/O batching. It also allows several modifications to a page before a single write."
+    },
+    {
+     "id": "layout-example",
+     "heading": "Detailed Layout Example",
+     "text": "Three records are inserted. R0 is 100 bytes. R1 is 50 bytes. R2 is 200 bytes. Then R1 is deleted. Byte: 0 16 22 26 30 34 3746 3846 3946 4096 ┌──────────┬────┬────┬────┬────┬─────────────────────────────┬─────┬─────┬─────┐ │PageHeader│Slot│ S0 │ S1 │ S2 │ FREE SPACE │ R2 │(gap)│ R0 │ │ (16 B) │Hdr │off │DEL │off │ │200B │ 50B │100B │ │ │6 B │len │0,0 │len │ │ │ │ │ └──────────┴────┴────┴────┴────┴─────────────────────────────┴─────┴─────┴─────┘ │ ↑ ↑ │ free_offset = 34 free_end = 3746 │ num_slots = 3 S0: offset=3946, length=100 (points to R0) S1: offset=0, length=0 (deleted) S2: offset=3746, length=200 (points to R2) The 50-byte gap at 3846-3896 is fragmented space from the deleted R1. It will be reclaimed when slot_compact() runs. After compaction the page looks like this. Byte: 0 16 22 26 30 34 3796 3996 4096 ┌──────────┬────┬────┬────┬────┬──────────────────────────────────┬─────┬─────┐ │PageHeader│Slot│ S0 │ S1 │ S2 │ FREE SPACE │ R2 │ R0 │ │ (16 B) │Hdr │off │DEL │off │ │200B │100B │ │ │6 B │len │0,0 │len │ │ │ │ └──────────┴────┴────┴────┴────┴──────────────────────────────────┴─────┴─────┘ │ ↑ ↑ │ free_offset = 34 free_end = 3796 │ num_slots = 3 (unchanged) S0: offset=3996, length=100 (updated to new position) S1: offset=0, length=0 (still deleted -- slot not removed) S2: offset=3796, length=200 (updated to new position) The 50-byte gap is gone. Free space increased from 3712 to 3762 bytes."
+    },
+    {
+     "id": "see-also",
+     "heading": "See Also",
+     "text": "Unified Storage Overview B+ Tree System Catalog Table API and DML"
+    }
+   ]
+  },
+  "system-catalog": {
+   "title": "System Catalog",
+   "sections": [
+    {
+     "id": "intro",
+     "heading": "Introduction",
+     "text": "System Catalog The system catalog stores all database metadata inside the unified storage file. Eight B+ trees map keys to records, and the records live as semicolon-delimited strings on slotted pages. This page describes the catalog trees, the descriptor structs, the key design, the serialization format, and the full catalog API. Source files. evolution/db/catalog_internal.h, evolution/db/catalog_internal.c. Tests. tests/test_catalog.c with 30 tests."
+    },
+    {
+     "id": "overview",
+     "heading": "Overview",
+     "text": "The system catalog stores all database metadata inside the unified storage file evosql.db. This metadata covers databases, schemas, tables, columns, indexes, constraints, user accounts, and privilege grants. There are no external metadata files. Every piece of metadata lives in one of eight B+ trees. The actual records are stored as semicolon-delimited strings on slotted pages. The B+ tree maps a key to a RowID. A RowID is a page number plus a slot index. The RowID points to the record on a slotted page. ┌─────────────────────────┐ │ FileHeader │ │ (Page 0 of evosql.db) │ │ │ │ catalog_roots[0..7] │ ← root page number of each B+ tree │ next_table_id │ │ next_schema_id │ │ next_db_id │ └────────┬────────────────┘ │ ┌────────────────┼────────────────┐ ▼ ▼ ▼ B+ Tree 0 B+ Tree 1 ... B+ Tree 7 (databases) (schemas) (grants) │ │ │ ▼ ▼ ▼ Slotted Pages Slotted Pages Slotted Pages (records) (records) (records) All catalog I/O flows through the buffer pool and the page manager. There is no direct file access. See the Unified Storage Overview and the Page Manager and Slotted Pages pages for the layers underneath."
+    },
+    {
+     "id": "catalog-trees",
+     "heading": "The Eight Catalog Trees",
+     "text": "Each catalog tree is identified by a CatalogID constant defined in page_mgr.h. The root page number of every tree is persisted in the FileHeader.catalog_roots[] array on page 0. ConstantIDPurposeB+ Tree Key CAT_SYS_DATABASES0Database registrydb_name CAT_SYS_SCHEMAS1Schema registrydb_id:schema_name CAT_SYS_TABLES2Table descriptorsschema_id:table_name CAT_SYS_COLUMNS3Column definitionstable_id:col_ordinal CAT_SYS_INDEXES4Secondary index metadatatable_id:index_name CAT_SYS_CONSTRAINTS5CHECK, UNIQUE, FK, PK constraintstable_id:ordinal CAT_SYS_USERS6User accounts with PBKDF2-SHA256 hashed passwordsusername CAT_SYS_GRANTS7Privilege grants with DATABASE, SCHEMA, or TABLE scopeusername:scope_type:scope_name The CatalogID enum and the CATALOG_ROOT_SLOTS constant are defined in page_mgr.h. There are 16 slots and 8 are used. typedef enum { CAT_SYS_DATABASES = 0, CAT_SYS_SCHEMAS = 1, CAT_SYS_TABLES = 2, CAT_SYS_COLUMNS = 3, CAT_SYS_INDEXES = 4, CAT_SYS_CONSTRAINTS = 5, CAT_SYS_USERS = 6, CAT_SYS_GRANTS = 7, CAT_MAX = 8 } CatalogID;"
+    },
+    {
+     "id": "descriptors",
+     "heading": "Descriptor Structs",
+     "text": "Each catalog tree has a matching C struct that represents one record. These structs are defined in catalog_internal.h."
+    },
+    {
+     "id": "database-desc",
+     "heading": "DatabaseDesc",
+     "text": "typedef struct { uint32_t db_id; char db_name[CAT_MAX_NAME_LEN]; // 128 } DatabaseDesc; The B+ tree key is the database name itself, for example \"evosql\". The record stores only the db_id. The name is recovered from the key."
+    },
+    {
+     "id": "schema-desc",
+     "heading": "SchemaDesc",
+     "text": "typedef struct { uint32_t schema_id; uint32_t db_id; char schema_name[CAT_MAX_NAME_LEN]; } SchemaDesc; Key format is \"%010u:%s\". It is the zero-padded db_id, then a colon, then the schema name."
+    },
+    {
+     "id": "table-desc",
+     "heading": "TableDesc",
+     "text": "typedef struct { uint32_t table_id; uint32_t schema_id; char table_name[CAT_MAX_NAME_LEN]; uint32_t pk_root_page; // root page of the table's primary-key B+ tree uint32_t heap_page; // first slotted page for row storage (0 = lazy alloc) int num_columns; int pad_size; int auto_inc_col; // column ordinal, or -1 if none int auto_inc_counter; int auto_inc_step; } TableDesc; Key format is \"%010u:%s\". It is the zero-padded schema_id, then a colon, then the table name. When a table is created, cat_create_table also creates a dedicated B+ tree for the table's primary index. It records its root page in pk_root_page. The heap_page field starts at 0. It is set on the first row insertion through cat_update_heap_page."
+    },
+    {
+     "id": "column-desc",
+     "heading": "ColumnDesc",
+     "text": "typedef struct { uint32_t table_id; int col_ordinal; char col_name[CAT_MAX_NAME_LEN]; int type_code; // typeVal / 10000 = type family, % 10000 = size int is_not_null; int is_unique; int is_pk; char default_val[CAT_MAX_DEFAULT_LEN]; // 256 } ColumnDesc; Key format is \"%010u:%010d\". It is the zero-padded table_id, then a colon, then the zero-padded col_ordinal. Both parts are numeric and zero-padded. This ensures columns are returned in ordinal order during prefix scans."
+    },
+    {
+     "id": "index-desc",
+     "heading": "IndexDesc",
+     "text": "typedef struct { uint32_t table_id; char index_name[CAT_MAX_NAME_LEN]; uint32_t root_page; char col_list[CAT_MAX_NAME_LEN]; // comma-separated column names char index_type; // 'P' primary, 'U' unique, 'N' normal } IndexDesc; Key format is \"%010u:%s\". It is the zero-padded table_id, then a colon, then the index name."
+    },
+    {
+     "id": "constraint-desc",
+     "heading": "ConstraintDesc",
+     "text": "typedef struct { uint32_t table_id; int ordinal; char constraint_type; // 'C' check, 'F' foreign key, 'P' primary, 'U' unique char definition[1024]; uint32_t ref_table_id; // for FK, 0 otherwise char ref_columns[CAT_MAX_NAME_LEN]; } ConstraintDesc; Key format is \"%010u:%010d\". It is the zero-padded table_id, then a colon, then the zero-padded ordinal. The ordinal is assigned from a global counter named g_constraint_ordinal. That counter increments monotonically across all tables."
+    },
+    {
+     "id": "user-desc",
+     "heading": "UserDesc",
+     "text": "typedef struct { char username[CAT_MAX_NAME_LEN]; char password_hash[CAT_MAX_HASH_LEN]; // 512 } UserDesc; The B+ tree key is the username. The record stores the PBKDF2-SHA256 password hash. The username is recovered from the key."
+    },
+    {
+     "id": "grant-desc",
+     "heading": "GrantDesc",
+     "text": "typedef struct { char username[CAT_MAX_NAME_LEN]; int scope_type; // 1=DATABASE, 2=SCHEMA, 3=TABLE char scope_name[CAT_MAX_NAME_LEN]; char privileges[CAT_MAX_NAME_LEN]; // comma-separated or \"ALL\" int grant_option; } GrantDesc; Key format is \"%s:%d:%s\". It is the username, then the scope type integer, then the scope name. This enables a prefix scan by \"username:\" to find all grants for a given user."
+    },
+    {
+     "id": "composite-keys",
+     "heading": "Composite Key Design",
+     "text": "B+ tree keys are variable-length strings up to 255 bytes. The limit is CAT_MAX_KEY_LEN, which equals BT2_MAX_KEY_LEN. Composite keys use : as the separator. Numeric ID components are zero-padded to 10 digits so that lexicographic comparison preserves numeric ordering. \"0000000001:users\" schema 1, table \"users\" \"0000000003:0000000002\" table 3, column ordinal 2 \"admin:1:evosql\" user \"admin\", scope DATABASE(1), database \"evosql\" The B+ tree comparator performs lexicographic comparison on all keys. The keys contain : so they are treated as strings, not numbers. Zero-padding guarantees that \"0000000002\" sorts before \"0000000010\". This encoding also enables efficient prefix scans. To list all columns of table 5, seek to \"0000000005:\" and iterate while keys still begin with that prefix. Every cat_list_* function uses this pattern. See the B+ Tree page for the cursor and comparator details."
+    },
+    {
+     "id": "serialization",
+     "heading": "Serialization Format",
+     "text": "Records are stored as semicolon-delimited strings on slotted pages. This matches the project-wide convention for row storage. Each descriptor struct has a serialize_* and deserialize_* function pair. For example, a TableDesc serializes to this string. \"1;1;users;42;0;3;256;-1;0;0\" │ │ │ │ │ │ │ │ │ └─ auto_inc_step │ │ │ │ │ │ │ │ └─── auto_inc_counter │ │ │ │ │ │ │ └────── auto_inc_col (-1 = none) │ │ │ │ │ │ └────────── pad_size │ │ │ │ │ └──────────── num_columns │ │ │ │ └────────────── heap_page │ │ │ └───────────────── pk_root_page │ │ └─────────────────────── table_name │ └───────────────────────── schema_id └─────────────────────────── table_id Field extraction uses the internal next_field() helper. It reads characters up to the next ; or the end of the string. For some descriptors, the key carries data that the record omits. DatabaseDesc. The record contains only db_id. The name comes from the B+ tree key. UserDesc. The record contains only the password hash. The username comes from the key. Maximum record size is CAT_MAX_RECORD_LEN, which is 2048 bytes."
+    },
+    {
+     "id": "id-generation",
+     "heading": "ID Generation",
+     "text": "Object IDs for databases, schemas, and tables are auto-incrementing integers stored in the FileHeader. typedef struct { // ... uint32_t next_table_id; // auto-increment for table IDs uint32_t next_schema_id; // auto-increment for schema IDs uint32_t next_db_id; // auto-increment for database IDs // ... } FileHeader; The pgm_next_id(int id_type) function atomically reads and increments the right counter. id_typeCounterUsed by 0next_table_idcat_create_table 1next_schema_idcat_create_schema 2next_db_idcat_create_database IDs start at 1. The counter initializes to 1 in a fresh file header. IDs are never reused after deletion."
+    },
+    {
+     "id": "bootstrap",
+     "heading": "Initialization and Bootstrap",
+     "text": ""
+    },
+    {
+     "id": "startup",
+     "heading": "Startup sequence",
+     "text": "pgm_init(\"evosql.db\") opens or creates the storage file. It initializes the page manager and the buffer pool. cat_init() initializes the system catalog."
+    },
+    {
+     "id": "first-run",
+     "heading": "First run with an empty file",
+     "text": "cat_init() detects that catalog_roots[CAT_SYS_DATABASES] is 0. This means there is no existing catalog. It then performs a full bootstrap. Creates 8 B+ trees through bt2_create(). Stores each tree's root page number in FileHeader.catalog_roots[] through pgm_set_catalog_root(). Inserts the default database \"evosql\". It is assigned db_id = 1. Inserts the default schema \"default\" under database 1. It is assigned schema_id = 1. Inserts the default user \"admin\" with an empty password hash. The server's authentication layer sets the real PBKDF2-SHA256 hash on first startup."
+    },
+    {
+     "id": "subsequent-runs",
+     "heading": "Subsequent runs",
+     "text": "cat_init() loads the 8 root page numbers from FileHeader.catalog_roots[] into the in-memory BTree2 handles. Data pages for each catalog tree are lazily allocated on the first insert after restart. This costs at most 8 pages, which is 32 KB of overhead."
+    },
+    {
+     "id": "shutdown",
+     "heading": "Shutdown",
+     "text": "cat_shutdown() calls pgm_flush() to write all dirty buffer pool pages to disk. It then resets all in-memory state."
+    },
+    {
+     "id": "api",
+     "heading": "API Reference",
+     "text": ""
+    },
+    {
+     "id": "api-lifecycle",
+     "heading": "Lifecycle",
+     "text": "int cat_init(void); // Bootstrap or load catalog; call after pgm_init() void cat_shutdown(void); // Flush dirty pages, reset state"
+    },
+    {
+     "id": "api-database",
+     "heading": "Database Operations",
+     "text": "int cat_create_database(const char *name); // Returns db_id (>0) on success, -1 if name already exists. int cat_find_database(const char *name, DatabaseDesc *out); // Returns 0 on success, -1 if not found. Pass NULL for out to check existence. int cat_drop_database(const char *name); // Returns 0 on success, -1 if not found. int cat_list_databases(DatabaseDesc *out, int max); // Returns count of databases written to out[]. Full tree scan."
+    },
+    {
+     "id": "api-schema",
+     "heading": "Schema Operations",
+     "text": "int cat_create_schema(uint32_t db_id, const char *name); // Returns schema_id (>0) on success, -1 if duplicate. int cat_find_schema(uint32_t db_id, const char *name, SchemaDesc *out); int cat_drop_schema(uint32_t db_id, const char *name); int cat_list_schemas(uint32_t db_id, SchemaDesc *out, int max); // Prefix scan on db_id. Returns only schemas belonging to the given database."
+    },
+    {
+     "id": "api-table",
+     "heading": "Table Operations",
+     "text": "int cat_create_table(uint32_t schema_id, const char *name, const ColumnDesc *cols, int ncols, int pad_size, int auto_inc_col, int auto_inc_start, int auto_inc_step); // Creates table descriptor, a primary-key B+ tree, and all column records. // Returns table_id (>0) on success, -1 on duplicate or error. int cat_find_table(uint32_t schema_id, const char *name, TableDesc *out); int cat_drop_table(uint32_t table_id); // Cascading delete: removes the table record plus all associated columns, // indexes, and constraints from the catalog. The caller is responsible for // destroying the PK B+ tree and freeing heap pages. int cat_update_auto_inc(uint32_t table_id, const char *table_name, uint32_t schema_id, int new_counter); // Updates auto_inc_counter in the table record. Attempts in-place slotted // page update; falls back to delete + re-insert if the record does not fit. int cat_update_heap_page(uint32_t table_id, const char *table_name, uint32_t schema_id, uint32_t heap_page); // Sets the heap_page field (called on first row insertion). int cat_list_tables(uint32_t schema_id, TableDesc *out, int max); // Prefix scan on schema_id."
+    },
+    {
+     "id": "api-column",
+     "heading": "Column Operations",
+     "text": "int cat_find_columns(uint32_t table_id, ColumnDesc *out, int max); // Prefix scan on table_id. Returns columns in ordinal order (guaranteed by // zero-padded ordinal in the B+ tree key). Returns count. Columns are created as part of cat_create_table. They are deleted as part of cat_drop_table. There is no standalone column creation API."
+    },
+    {
+     "id": "api-index",
+     "heading": "Index Operations",
+     "text": "int cat_create_index(uint32_t table_id, const char *name, uint32_t root_page, const char *col_list, char index_type); // index_type: 'P' primary, 'U' unique, 'N' normal. int cat_find_index(uint32_t table_id, const char *name, IndexDesc *out); // Direct key lookup (requires table_id). int cat_find_index_by_name(const char *name, IndexDesc *out); // Full tree scan. Finds index by name alone, regardless of table. int cat_list_indexes(uint32_t table_id, IndexDesc *out, int max); // Prefix scan on table_id. int cat_drop_index(uint32_t table_id, const char *name); int cat_update_index_root(uint32_t table_id, const char *name, uint32_t new_root_page); // Updates root_page after B+ tree splits or merges change the root."
+    },
+    {
+     "id": "api-constraint",
+     "heading": "Constraint Operations",
+     "text": "int cat_add_constraint(uint32_t table_id, char type, const char *definition, uint32_t ref_table_id, const char *ref_columns); // type: 'C' check, 'F' foreign key, 'P' primary key, 'U' unique. // ref_table_id and ref_columns are used only for FK constraints (pass 0 and \"\" otherwise). // Ordinal is assigned from a global counter. int cat_list_constraints(uint32_t table_id, ConstraintDesc *out, int max); // Prefix scan on table_id."
+    },
+    {
+     "id": "api-user",
+     "heading": "User Operations",
+     "text": "int cat_create_user(const char *username, const char *password_hash); int cat_find_user(const char *username, UserDesc *out); int cat_update_user(const char *username, const char *new_hash); int cat_drop_user(const char *username); int cat_list_users(UserDesc *out, int max); // Full tree scan."
+    },
+    {
+     "id": "api-grant",
+     "heading": "Grant Operations",
+     "text": "int cat_create_grant(const char *username, int scope_type, const char *scope_name, const char *privileges, int grant_option); // scope_type: 1=DATABASE, 2=SCHEMA, 3=TABLE. // privileges: comma-separated list or \"ALL\". int cat_find_grant(const char *username, int scope_type, const char *scope_name, GrantDesc *out); int cat_drop_grant(const char *username, int scope_type, const char *scope_name); int cat_list_grants_for_user(const char *username, GrantDesc *out, int max); // Prefix scan on \"username:\". int cat_drop_all_grants_for_user(const char *username); // Collects all grant keys for the user, then deletes them in a second pass // (cannot delete during a B+ tree cursor scan)."
+    },
+    {
+     "id": "api-resolve",
+     "heading": "Convenience Three-Level Resolution",
+     "text": "int cat_resolve_table(const char *db_name, const char *schema_name, const char *table_name, TableDesc *out); This performs a three-step lookup. First cat_find_database. Then cat_find_schema using db.db_id. Then cat_find_table using schema.schema_id. It returns 0 on success and -1 if any level fails. This is the primary entry point used by DML operations to resolve a table name to its descriptor. Those operations are SELECT, INSERT, UPDATE, and DELETE. See the Table API and DML page for how DML uses this descriptor."
+    },
+    {
+     "id": "storage-pattern",
+     "heading": "Internal Data Storage Pattern",
+     "text": "All catalog operations follow the same create, find, and drop pattern internally."
+    },
+    {
+     "id": "pattern-create",
+     "heading": "Create",
+     "text": "1. Build composite B+ tree key from the input IDs and name. 2. Check for duplicates via bt2_search (return -1 if key exists). 3. Allocate an auto-increment ID via pgm_next_id(). 4. Populate the descriptor struct. 5. Serialize the struct to a semicolon-delimited string. 6. Insert the string into a slotted page via cat_store_record() → returns RowID. 7. Insert (key → RowID) into the B+ tree via bt2_insert()."
+    },
+    {
+     "id": "pattern-find",
+     "heading": "Find",
+     "text": "1. Build key. 2. bt2_search(key) → RowID. 3. cat_read_record(RowID) → semicolon-delimited string. 4. Deserialize string into the descriptor struct."
+    },
+    {
+     "id": "pattern-list",
+     "heading": "List with prefix scan",
+     "text": "1. Build prefix (e.g., \"0000000005:\"). 2. bt2_cursor_seek(prefix) → position cursor at first matching key. 3. Loop: bt2_cursor_next() → (key, RowID). 4. Break when key no longer starts with the prefix. 5. Read and deserialize each record."
+    },
+    {
+     "id": "pattern-drop",
+     "heading": "Drop",
+     "text": "1. Build key. 2. bt2_search(key) → RowID. 3. cat_delete_record(RowID) marks slot as deleted on the slotted page. 4. bt2_delete(key) removes entry from the B+ tree."
+    },
+    {
+     "id": "pattern-update",
+     "heading": "Update with in-place or relocate",
+     "text": "This applies to mutable fields such as auto_inc_counter, heap_page, and root_page. 1. bt2_search(key) → RowID. 2. Read record, deserialize, modify field, re-serialize. 3. Try slot_update() for in-place replacement on the same slotted page. 4. If the updated record does not fit in the same slot: a. Delete the record from the slotted page. b. Insert the record on a (possibly different) slotted page → new RowID. c. bt2_update(key, new_RowID) to point the B+ tree at the relocated record."
+    },
+    {
+     "id": "slotted-pages",
+     "heading": "Slotted Page Management",
+     "text": "Each of the 8 catalog trees keeps a current data page for new record insertions. The current page is held in g_cat_data_pages[CatalogID]. When cat_store_record is called, it does the following. If a current data page exists, it tries slot_insert on it. If the page is full, or no current page is set, it allocates a fresh PAGE_DATA page through pgm_alloc_page. It initializes the page with slot_page_init, inserts the record, and updates g_cat_data_pages. infoAfter a server restart, all g_cat_data_pages entries reset to 0. The first insert into each catalog tree allocates a fresh data page. This can waste up to 8 pages, which is 32 KB, per restart. It avoids the complexity of scanning for partially-full data pages."
+    },
+    {
+     "id": "constants",
+     "heading": "Constants",
+     "text": "#define CAT_MAX_COLUMNS 64 // max columns per table #define CAT_MAX_NAME_LEN 128 // max identifier length #define CAT_MAX_DEFAULT_LEN 256 // max DEFAULT value string #define CAT_MAX_HASH_LEN 512 // max password hash length #define CAT_MAX_KEY_LEN 255 // matches BT2_MAX_KEY_LEN #define CAT_MAX_RECORD_LEN 2048 // max serialized record size"
+    }
+   ]
+  },
+  "table-api-and-dml": {
+   "title": "Table API and DML",
+   "sections": [
+    {
+     "id": "intro",
+     "heading": "Introduction",
+     "text": "Table API and DML The Table API in table_api.h and table_api.c bridges SQL operations and the storage engine. It wraps catalog resolution, heap page input and output, primary key management, and full table scans. The DML modules build INSERT, SELECT, UPDATE, DELETE, DROP, CREATE, and index operations on top of it. All table data is stored in slotted pages for heap storage. Rows are indexed by B+ trees through the btree2 module. The system catalog tracks table metadata, column definitions, constraints, and index descriptors. Every DML module depends on the Table API. See also the unified storage overview, the page manager and slotted pages, and the B+ tree pages."
+    },
+    {
+     "id": "table-api",
+     "heading": "Table API",
+     "text": "The Table API is a focused set of functions in table_api.h and table_api.c. It encapsulates catalog resolution, heap page input and output, primary key management, and full table scanning. Every DML module depends on it."
+    },
+    {
+     "id": "tapi-resolve",
+     "heading": "tapi_resolve, catalog resolution",
+     "text": "int tapi_resolve(const char *name_or_path, TableDesc *td, ColumnDesc *cols, int *ncols); This function resolves a table name into a TableDesc structure and an optional ColumnDesc array. The name can be a plain name like \"employees\". It can also be a full path like \"root/evosql/default/employees\". The work happens in three steps. It strips directory prefixes and the .dat extension through tapi_basename(). It calls cat_resolve_table(g_currentDatabase, g_currentSchema, name, td) to look up the table in the system catalog. The lookup uses the current database and schema context. If cols and ncols are non-NULL, it calls cat_find_columns(td->table_id, cols, CAT_MAX_COLUMNS) to fill the column descriptors. It returns 0 on success. It returns -1 if the table does not exist."
+    },
+    {
+     "id": "tapi-pk-tree",
+     "heading": "tapi_pk_tree, B+ tree handle for the primary key",
+     "text": "static inline BTree2 tapi_pk_tree(const TableDesc *td) { BTree2 tree = { td->pk_root_page }; return tree; } This function builds a BTree2 handle from the table's pk_root_page. It is a zero-cost inline. Every DML operation uses it to reach the primary key index."
+    },
+    {
+     "id": "tapi-build-pk-key",
+     "heading": "tapi_build_pk_key and tapi_build_pk_key_from_vals, PK key composition",
+     "text": "int tapi_build_pk_key(const ColumnDesc *cols, int ncols, const char *record, char *key_out, int key_size); int tapi_build_pk_key_from_vals(const ColumnDesc *cols, int ncols, char **vals, int nvals, char *key_out, int key_size); These functions build a composite primary key string from record fields. They scan the ColumnDesc array for columns with is_pk == 1 and join their values. Single PK. The key looks like \"42\". Composite PK. The key looks like \"42|alice\". The parts are pipe-delimited. If no column has is_pk set, the first column is used as a fallback. The _from_vals variant takes a pre-parsed value array. The plain variant parses a semicolon-delimited record string on its own."
+    },
+    {
+     "id": "tapi-get-pk-indices",
+     "heading": "tapi_get_pk_indices, PK column positions",
+     "text": "int tapi_get_pk_indices(const ColumnDesc *cols, int ncols, int *indices, int max); This function returns the ordinal positions of PK columns within the schema. UPDATE and DELETE use it to detect when a SET clause changes a PK column. A change to a PK column requires B+ tree key updates."
+    },
+    {
+     "id": "heap-ops",
+     "heading": "Heap page operations",
+     "text": "All record data lives in slotted pages. The pages are chained together through PageHeader.next_page. The Table API provides four heap operations. tapi_heap_insert RowID tapi_heap_insert(TableDesc *td, const char *record, uint16_t rec_len); It tries slot_insert() on the table's current heap_page. If the page is full, or if no heap page exists, it allocates a fresh PAGE_DATA page through pgm_alloc_page(). It initializes the page with slot_page_init(). It chains the page by setting new_page->next_page = td->heap_page. It updates td->heap_page and persists it through cat_update_heap_page(). It returns the RowID of the inserted record. The RowID is a page number and a slot index. It returns {0, 0} on error. tapi_heap_read int tapi_heap_read(RowID rid, char *buf, int bufsize); This function reads the page at rid.page_no. It then calls slot_read() for rid.slot_idx. It returns the record length, which is null-terminated, or -1 on error. tapi_heap_update RowID tapi_heap_update(TableDesc *td, RowID old_rid, const char *new_record, uint16_t rec_len); This function tries an in-place update through slot_update(). If the record does not fit in the existing slot, it falls back to delete-then-insert. The slot's free space is not enough in that case. It deletes the old slot. It then calls tapi_heap_insert() to place the record in a page with space. It returns the RowID, which may have changed. tapi_heap_delete int tapi_heap_delete(RowID rid); This function reads the page. It calls slot_delete() to mark the slot as free. It writes the page back. It returns 0 on success."
+    },
+    {
+     "id": "table-scan",
+     "heading": "Full table scan",
+     "text": "int tapi_scan_begin(const TableDesc *td, TableScanCursor *cursor); int tapi_scan_next(TableScanCursor *cursor, char *pk_key_out, char *record_out, int rec_out_size); Table scans iterate over the PK B+ tree, not the heap chain. This yields records in primary key order. tapi_scan_begin() opens a cursor at the first leaf entry through bt2_cursor_first(). Each call to tapi_scan_next() advances the cursor with bt2_cursor_next(). It retrieves the PK key and the RowID. It then fetches the record through tapi_heap_read(). The TableScanCursor wraps a BTree2Cursor and the BTree2 handle. typedef struct { BTree2Cursor bt_cursor; BTree2 tree; } TableScanCursor;"
+    },
+    {
+     "id": "tapi-free-heap-pages",
+     "heading": "tapi_free_heap_pages",
+     "text": "void tapi_free_heap_pages(const TableDesc *td); This function walks the heap page chain. It starts at td->heap_page and follows next_page pointers. It calls pgm_free_page() on each page. DROP TABLE and bulk cleanup use it."
+    },
+    {
+     "id": "dml",
+     "heading": "DML operations",
+     "text": ""
+    },
+    {
+     "id": "create-table",
+     "heading": "CREATE TABLE (Create.c)",
+     "text": "CreateTableProcess() orchestrates table creation through the catalog and storage layers. Catalog registration. It calls cat_create_table() to register the table in CAT_SYS_TABLES. This assigns a unique table_id. PK B+ tree creation. It calls bt2_create() to allocate the root page for the primary key index. The root page number is stored in the catalog through cat_update_pk_root(). Column registration. It calls cat_create_columns() to store each column's metadata in CAT_SYS_COLUMNS. The metadata covers the name, type code, nullability, default value, uniqueness, and PK flag. Constraint registration. It registers CHECK constraints, UNIQUE constraints, and FOREIGN KEY constraints in CAT_SYS_CONSTRAINTS. AUTO_INCREMENT. If any column has AUTO_INCREMENT, the auto-increment column index, counter, and step are stored in the TableDesc and persisted in the catalog."
+    },
+    {
+     "id": "insert",
+     "heading": "INSERT (Insert.c)",
+     "text": "INSERT INTO employees (name, dept, salary) VALUES ('Alice', 'Eng', 90000); Data flow. Parser (RPN) --> InsertProcess() | v tapi_resolve(tblName) -- catalog lookup | v [Column reordering] -- if INSERT specifies column list | v [AUTO_INCREMENT] -- generate value if needed | v [Validation pipeline] -- types, NOT NULL, UNIQUE, CHECK | v [Unique index pre-check] -- btree_search on secondary indexes | v store_single_row() | +-- tapi_build_pk_key() -- compose PK from values +-- bt2_search() -- duplicate PK check +-- g_tx_undo_callback() -- record TX_OP_INSERT undo entry +-- tapi_heap_insert() -- store record in slotted page +-- bt2_insert() -- index PK in B+ tree | v [Secondary index update] -- btree_insert() for each index | v [Persist AUTO_INCREMENT] -- cat_update_auto_inc() Key details. Multi-row INSERT. g_insert contains all rows separated by ROW_SEP, which is \\x02. Each row is processed on its own through the validation and storage pipeline. Column reordering. When the INSERT gives a column list, such as INSERT INTO t (c2, c1) VALUES ..., reorder_row_for_column_map() maps the user-specified column order to the schema's physical column order. It fills missing columns with DEFAULT values or NULL. Duplicate PK detection. store_single_row() calls bt2_search() before inserting. If the key exists, it returns 1 for duplicate without changing any data. Root page tracking. After bt2_insert(), the function updates td->pk_root_page = pk_tree.root_page. A B+ tree split may have created a new root page."
+    },
+    {
+     "id": "select",
+     "heading": "SELECT (Select.c)",
+     "text": "SELECT * FROM employees WHERE dept = 'Eng'; Data flow. Parser (RPN) --> SelectAll() / SelectProcess() | v tapi_resolve(tblName) -- catalog lookup | v +---[Access path decision]---+ | | Full Scan PK Lookup | | v v tapi_scan_begin() bt2_search(pk_tree, key) tapi_scan_next() loop | | v v tapi_heap_read(rid) [WHERE evaluation] | | v v [Single result] [ORDER BY sort] | v [Result output] SelectAll() handles SELECT * with two paths. Simple scan. It opens a TableScanCursor through tapi_scan_begin(). It iterates with tapi_scan_next() and prints each record. ORDER BY. It collects all records into an array. It sorts them with qsort() using the specified column index g_sortColIndex and direction g_sortDesc. It then prints the sorted result. SelectProcess() lives in the adaptor's query_executor.c. It handles full SQL SELECT with WHERE. PK Lookup. When WHERE matches the primary key column with =, it performs a single bt2_search() plus tapi_heap_read(). Index Scan. When WHERE matches a secondary index column, it uses sec_idx_search() to find matching PKs. It then fetches each one through bt2_search() plus tapi_heap_read(). Sequential Scan. It falls back to tapi_scan_begin() and tapi_scan_next() over all rows. It evaluates the WHERE expression on each record through expr_evaluate()."
+    },
+    {
+     "id": "update",
+     "heading": "UPDATE (Update.c)",
+     "text": "UPDATE employees SET salary = 95000 WHERE name = 'Alice'; Data flow. Parser (RPN) --> UpdateProcess() | v tapi_resolve(tblName) -- catalog lookup | v [Identify matching rows] -- WHERE scan or PK lookup | v ApplyUpdateToRow() | +-- bt2_search(pk_tree, pkKey) +-- tapi_heap_read(rid) -- fetch current record +-- g_tx_undo_callback() -- TX_OP_UPDATE with old data +-- [Modify fields] -- apply SET column = value +-- [CHECK validation] -- expr_evaluate on updated row +-- [Unique index check] -- btree_search for conflicts +-- tapi_heap_update() -- write modified record +-- bt2_update() -- update PK tree if RowID moved +-- [Secondary idx update] -- btree_delete old + btree_insert new Key details. In-place update versus relocated update. tapi_heap_update() first tries slot_update() in place. If the record grew and no longer fits, it deletes the old slot and inserts into a page with space. That returns a different RowID. When the RowID changes, bt2_update() updates the PK B+ tree's value pointer. Secondary index maintenance. The SET clause may modify an indexed column. For each secondary index on a modified column, the function deletes the old composite key with btree_delete(path, old_value, pk). It then inserts the new one with btree_insert(path, new_value, pk). CHECK constraint re-evaluation. After the field values change in memory, all CHECK constraints are re-evaluated against the updated row before it is persisted."
+    },
+    {
+     "id": "delete",
+     "heading": "DELETE (Delete.c)",
+     "text": "DELETE FROM employees WHERE dept = 'Eng'; Data flow. Parser (RPN) --> DeleteProcess() | v tapi_resolve(tblName) -- catalog lookup | v +---[WHERE present?]---+ | | Expression WHERE PK-based delete | | v v tapi_scan_begin/next() bt2_search(pkKey) [expr_evaluate loop] | [collect matching keys] v | tapi_heap_read(rid) v | [Phase 2: delete] v for each match: g_tx_undo_callback() | | +-- bt2_search() v +-- tapi_heap_read() [sec idx cleanup] +-- g_tx_undo_callback() | +-- [sec idx cleanup] v +-- tapi_heap_delete() tapi_heap_delete() +-- bt2_delete() bt2_delete() Two-phase WHERE delete. Phase 1, scan and collect. It iterates all records through tapi_scan_begin() and tapi_scan_next(). It evaluates the WHERE expression on each row. It collects matching PK keys into a dynamically allocated array called matchKeys. This avoids modifying the B+ tree while iterating it. Phase 2, delete collected. For each collected key, it looks up the RowID through bt2_search(). It reads the record for undo logging and index cleanup. It removes the row from secondary indexes. It then calls tapi_heap_delete() and bt2_delete()."
+    },
+    {
+     "id": "drop-table",
+     "heading": "DROP TABLE (Drop.c)",
+     "text": "DROP TABLE employees; Data flow. Parser (RPN) --> DropTableProcess() | v tapi_resolve(tblName) -- catalog lookup | v bt2_destroy(pk_tree) -- free all PK B+ tree pages | v tapi_free_heap_pages() -- walk heap chain, pgm_free_page each | v [Destroy secondary indexes] -- cat_list_indexes + bt2_destroy each | v cat_drop_table(table_id) -- remove from catalog cat_drop_table() removes the table entry from the system catalog B+ trees. It also removes all associated column entries, all index entries, and all constraint entries. After DROP TABLE, all storage pages return to the free list. This covers PK tree nodes, heap data pages, and secondary index nodes. TRUNCATE TABLE runs through TruncateTableProcess(). It preserves the table structure but deletes all data. It collects all PK keys through a B+ tree cursor scan. For each key it calls tapi_heap_delete() and bt2_delete(). The table's PK tree and heap pages stay allocated but empty."
+    },
+    {
+     "id": "secondary-indexes",
+     "heading": "Secondary indexes (Index.c)",
+     "text": "Secondary indexes are B+ trees. Each key encodes both the indexed column value and the row's primary key. This ensures uniqueness at the B+ tree level."
+    },
+    {
+     "id": "composite-key-format",
+     "heading": "Composite key format",
+     "text": "\"indexed_value\" + \\x1F + \"pk_value\" The Unit Separator character is \\x1F, ASCII 31. It is chosen for three reasons. It sorts before all printable characters. This enables efficient prefix scans. It never appears in user data. A prefix scan on \"indexed_value\\x1F\" finds all rows that match that indexed value. For multi-column composite indexes, column values within the indexed portion are pipe-delimited. They look like \"val1|val2\\x1Fpk\"."
+    },
+    {
+     "id": "sec-idx-core",
+     "heading": "Core operations",
+     "text": "sec_idx_search int sec_idx_search(uint32_t root_page, const char *indexed_val, char results[][256], int max_results); This function performs a prefix scan on the secondary index B+ tree. It seeks to \"indexed_val\\x1F\" through bt2_cursor_seek(). It then iterates forward with bt2_cursor_next() until the prefix no longer matches. It returns the PK portion of each matching key, which is the part after \\x1F. A companion function sec_idx_search_rids() returns RowID values directly instead of PK strings. sec_idx_insert int sec_idx_insert(uint32_t *root_page, const char *indexed_val, const char *pk, RowID heap_rid); This function builds the composite key through sec_idx_make_key(). It inserts the key into the B+ tree with the heap RowID as the value. It updates *root_page if the tree's root splits. sec_idx_delete int sec_idx_delete(uint32_t *root_page, const char *indexed_val, const char *pk); This function builds the composite key and deletes it from the B+ tree. The PK component ensures only the exact row's entry is removed."
+    },
+    {
+     "id": "legacy-wrappers",
+     "heading": "Legacy wrapper functions",
+     "text": "The DML modules use wrapper functions. These encode index identity as a path string in the format \"table_id:index_name:root_page\". btree_insert(path, key, pk). It parses the path, builds the composite key, calls bt2_insert(), and updates the catalog root page through cat_update_index_root() if it changed. btree_search(path, key, results, max). It parses the path and delegates to sec_idx_search(). btree_delete(path, key, pk). It parses the path, builds the composite key, calls bt2_delete(), and updates the catalog if the root changed. These wrappers give DML code a stable interface. They hide the composite key encoding and the catalog root-page tracking."
+    },
+    {
+     "id": "create-index",
+     "heading": "CREATE INDEX (CreateIndexProcess)",
+     "text": "CREATE INDEX idx_dept ON employees(dept); CREATE UNIQUE INDEX idx_email ON employees(email); Resolve table. It calls tapi_resolve() to verify the table exists and to retrieve column metadata. Verify columns. It checks that all specified columns exist in the schema. It supports composite indexes such as col1,col2. Check duplicates. It queries cat_list_indexes() to see if an index on the same columns already exists. It respects IF NOT EXISTS. Create B+ tree. It calls bt2_create() to allocate the root page for the index. Populate from existing data. It opens a TableScanCursor and iterates all rows. For each row it does the following. It extracts the indexed column values from the record. For UNIQUE indexes, it calls sec_idx_search() to check for duplicates. If a duplicate is found, it destroys the partially built tree and returns an error. It builds the composite key indexed_value\\x1Fpk_value and calls bt2_insert(). Register in catalog. It calls cat_create_index() to store the index metadata. The metadata covers the name, root page, column list, and type 'U' or 'N'."
+    },
+    {
+     "id": "drop-index",
+     "heading": "DROP INDEX (DropIndexProcess)",
+     "text": "It finds the index by name through cat_find_index_by_name(). It rejects dropping PK indexes, where index_type == 'P'. It destroys the B+ tree through bt2_destroy(). It removes the index from the catalog through cat_drop_index()."
+    },
+    {
+     "id": "explain",
+     "heading": "EXPLAIN integration",
+     "text": "The query executor classifies access methods for EXPLAIN output. Access methodCondition PK Lookup (Hash)WHERE clause matches the primary key column with = Index Scan (Unique B-tree)WHERE column has a UNIQUE secondary index Index Scan (B-tree)WHERE column has a non-unique secondary index Seq ScanNo applicable index. A full table scan is required"
+    },
+    {
+     "id": "transactions",
+     "heading": "Transactions",
+     "text": "EvoSQL implements single-connection ACID transactions. It uses an undo-log approach. The transaction subsystem lives in adaptor/transaction.h and adaptor/transaction.c."
+    },
+    {
+     "id": "tx-data-structures",
+     "heading": "Data structures",
+     "text": "typedef struct UndoEntry { int op_type; /* TX_OP_INSERT (1) / TX_OP_UPDATE (2) / TX_OP_DELETE (3) */ char *table; /* table name */ char *key; /* primary key value */ char *old_data; /* previous record data (NULL for INSERT) */ struct UndoEntry *next; /* linked list, stack order (newest first) */ } UndoEntry; typedef struct { UndoEntry *head; /* most recent entry (top of stack) */ int count; /* number of entries */ } UndoLog; The undo log is a singly-linked list used as a stack. Entries are pushed to the head. This way rollback processes them in reverse chronological order."
+    },
+    {
+     "id": "tx-session",
+     "heading": "Session integration",
+     "text": "Each client connection keeps a SessionCtx. It is defined in adaptor/query_executor.h. typedef struct { char database[256]; char schema[256]; char username[256]; int in_transaction; /* 1 if BEGIN was issued */ int tx_aborted; /* 1 if error occurred in transaction */ UndoLog *undo_log; /* undo entries for rollback */ } SessionCtx; Transaction state transitions. BEGIN. It sets in_transaction = 1 and allocates a fresh UndoLog. COMMIT. It sets in_transaction = 0 and frees the UndoLog. Changes are now permanent. ROLLBACK. It calls undo_log_rollback(), frees the log, and resets in_transaction = 0 and tx_aborted = 0. Error in transaction. It sets tx_aborted = 1. Later queries are rejected with SQLSTATE 25P02. ROLLBACK is the exception."
+    },
+    {
+     "id": "tx-dml-hook",
+     "heading": "DML hook mechanism",
+     "text": "DML operations record undo entries through a function pointer callback. It is declared as g_tx_undo_callback in database.h. void (*g_tx_undo_callback)(int op_type, const char *table, const char *key, const char *data); Before each query, safe_query_execute() in server.c checks whether the session is in a transaction. In transaction. It sets g_tx_undo_callback = tx_undo_callback. It sets g_current_undo_log, which is thread-local, to the session's undo log. Not in transaction. It sets both to NULL. Each DML operation checks g_tx_undo_callback before it modifies data. OperationUndo entry INSERTTX_OP_INSERT, key = PK, old_data = NULL UPDATETX_OP_UPDATE, key = PK, old_data = pre-update record DELETETX_OP_DELETE, key = PK, old_data = deleted record After the query completes, safe_query_execute() clears the callback and the thread-local undo log pointer."
+    },
+    {
+     "id": "tx-rollback",
+     "heading": "Rollback",
+     "text": "undo_log_rollback() traverses the undo log from head to tail. That is reverse chronological order. It applies the inverse operation for each entry. Original opUndo action TX_OP_INSERTbt2_search() to find the RowID, then tapi_heap_delete() and bt2_delete() TX_OP_UPDATEbt2_search() to find the RowID, then tapi_heap_update() with the old data, then bt2_update() if the RowID moved TX_OP_DELETEtapi_heap_insert() with the old data, then bt2_insert() to restore the PK index entry Each undo action resolves the table through tapi_resolve() using the stored table name. This ensures it works with the correct catalog state."
+    },
+    {
+     "id": "tx-disconnect",
+     "heading": "Disconnect auto-rollback",
+     "text": "Both protocol handlers check for open transactions when a client disconnects. The PG wire protocol handler is pg_handler.c. The EVO text protocol handler is evo_protocol.c. If session.in_transaction is true, the handler does the following. It allocates a temporary QueryContext. The per-query context is already freed. It restores the database and schema from the session. It calls undo_log_rollback(). It frees the undo log and resets the session state. infoThis guarantees that uncommitted changes are never persisted when a client drops its connection."
+    }
+   ]
+  },
+  "unified-storage-overview": {
+   "title": "Unified Storage Overview",
+   "sections": [
+    {
+     "id": "intro",
+     "heading": "Introduction",
+     "text": "Unified Storage Overview EvolutionDB keeps all of its data in one binary file called evosql.db. This single file holds databases, schemas, tables, indexes, users, grants, and the system catalog. The file is split into fixed-size 4KB pages. Every disk read and write goes through a Clock Sweep buffer pool. All structural links inside the file are kept with B+ tree indexes and slotted pages."
+    },
+    {
+     "id": "architecture",
+     "heading": "Architecture Overview",
+     "text": "All data lives in one file made of 4KB pages. Page 0 holds the file header. The rest of the file holds data pages, B+ tree nodes, and free pages. evosql.db (single binary file, 4KB pages) Page 0: FileHeader (magic, free list head, catalog roots, ID counters) Page 1..N: Data pages, B+ tree nodes, free pages The storage engine is built in layers. Each layer depends only on the layer below it. ┌──────────────────────────────────────────────────┐ │ DML Modules (Insert / Select / ...) │ ├──────────────────────────────────────────────────┤ │ Table API │ System Catalog │ │ tapi_heap_insert │ cat_create_table │ │ tapi_scan_begin │ cat_find_columns │ │ tapi_build_pk_key │ cat_resolve_table │ ├──────────────────────────────────────────────────┤ │ B+ Tree (bt2_insert / search / cursor) │ ├──────────────────────────────────────────────────┤ │ Slotted Pages (slot_insert / read) │ ├──────────────────────────────────────────────────┤ │ Page Manager (pgm_alloc / read / write) │ ├──────────────────────────────────────────────────┤ │ Buffer Pool (bp_read / bp_write) │ └──────────────────────────────────────────────────┘ ┌────────────────┐ │ evosql.db │ └────────────────┘"
+    },
+    {
+     "id": "page-layout",
+     "heading": "Page Layout",
+     "text": "Every page is exactly EVO_PAGE_SIZE bytes, which is 4096. The first 16 bytes of every page hold a common header. typedef struct { uint8_t page_type; /* PAGE_FREE=0, PAGE_DATA=1, PAGE_BTREE_INT=2, PAGE_BTREE_LEAF=3, PAGE_OVERFLOW=4 */ uint8_t flags; /* reserved */ uint16_t free_space; /* bytes of free space on this page */ uint32_t page_id; /* self-identifying page number */ uint32_t next_page; /* free list chain or leaf chain */ uint32_t prev_page; /* B+ tree leaf backward pointer */ } PageHeader; /* 16 bytes */ Usable space per page is 4096 - 16 = 4080 bytes."
+    },
+    {
+     "id": "page-0-file-header",
+     "heading": "Page 0 File Header",
+     "text": "Page 0 is reserved for the FileHeader. It is never freed. FieldSizeDescription magic4B0x45564F44 (\"EVOD\") version2BFile format version (currently 1) page_size2BAlways 4096 total_pages4BTotal pages in file free_list_head4BFirst free page (0 = none) catalog_roots[16]64BRoot page numbers for system catalog B+ trees next_table_id4BAuto-increment counter for table IDs next_schema_id4BAuto-increment counter for schema IDs next_db_id4BAuto-increment counter for database IDs reserved4004BPad to full page"
+    },
+    {
+     "id": "free-list",
+     "heading": "Free List",
+     "text": "Free pages are chained through the next_page field in their PageHeader. When pgm_alloc_page() is called, the page manager does one of two things. If the free list is not empty, it pops the head page and initializes it with the requested type. If the free list is empty, it grows the file by 50% of the current size, with a minimum of 16 pages. It chains the new pages into the free list. Then it allocates. When pgm_free_page() is called, the page is zeroed and pushed onto the front of the free list. Page 0 cannot be freed. The initial file is 64 pages, which is 256KB. Pages 1 through 63 form the initial free list."
+    },
+    {
+     "id": "buffer-pool",
+     "heading": "Buffer Pool",
+     "text": "All page I/O flows through a Clock Sweep buffer pool in buffer_pool.h/c. It is modeled after PostgreSQL's buffer manager. The pool caches 4KB pages in memory. It uses write-back semantics. Dirty pages are flushed to disk only on eviction or on an explicit flush. Key parameters. ConstantValueDescription BP_PAGE_SIZE4096Cache page granularity BP_DEFAULT_PAGES256Default pool size (1MB) BP_MAX_USAGE5Maximum usage count per page BP_RING_SIZE8Sequential scan ring buffer slots Clock Sweep algorithm. A clock hand rotates through all buffer slots. When a victim is needed, the pool checks each slot in turn. If pin_count > 0, skip the page. It is in use. If usage_count == 0, select the page as the victim. Flush it to disk if it is dirty, then evict it. Otherwise, decrement usage_count and advance the hand. Each cache hit increments usage_count, up to BP_MAX_USAGE. This gives frequently accessed pages more chances to survive eviction sweeps. Anti-pollution ring buffer. Sequential scans use bp_read_seq() with a private BPRing. The ring has 8 slots and works round-robin. This stops large table scans from evicting hot pages from the main pool. Core API. void bp_init(int num_pages); /* allocate pool */ int bp_read(int fd, void *buf, size_t count, off_t offset); int bp_write(int fd, const void *buf, size_t count, off_t offset); void bp_flush_all(void); /* write all dirty pages to disk */ void bp_flush_fd(int fd); /* flush dirty pages for one fd */ void bp_invalidate_fd(int fd); /* flush + drop all pages for fd */ The pool uses an open-addressing hash table for fast lookup. The table is 4 times the pool size and uses linear probing. It is keyed by (fd, page_no) for O(1) page lookup. An internal mutex serializes all pool operations for thread safety."
+    },
+    {
+     "id": "components",
+     "heading": "Component Summary",
+     "text": ""
+    },
+    {
+     "id": "page-manager",
+     "heading": "Page Manager (page_mgr.h/c)",
+     "text": "The page manager manages the global evosql.db file. It provides page allocation and deallocation, free list management, file growth, and access to file header fields. The header fields include the catalog root pages and the auto-increment counters. All reads and writes delegate to the buffer pool. See Page Manager and Slotted Pages."
+    },
+    {
+     "id": "slotted-pages",
+     "heading": "Slotted Pages (slotted.h/c)",
+     "text": "Slotted pages store variable-length records within a single 4KB data page. The page layout is shown below. [PageHeader 16B][SlottedHeader 6B][Slot Directory -->] [ FREE SPACE ] [<-- Records packed from end of page] Each record is identified by a RowID = {page_no, slot_idx}, which is 6 bytes. A RowID with page_no == 0 is the \"deleted\" sentinel. This works because page 0 is always the file header. The slot directory grows forward. Records grow backward. Deleted slots can be reused. slot_compact() defragments records to reclaim space from deletions. Maximum record size is 4096 - 16 - 6 - 4 = 4070 bytes. See Page Manager and Slotted Pages."
+    },
+    {
+     "id": "bplus-tree",
+     "heading": "B+ Tree (btree2.h/c)",
+     "text": "The B+ tree provides O(log n) key-to-RowID indexing. Each B+ tree node occupies one 4KB page. Leaf nodes are doubly linked for efficient sequential and range scans. Key format. The key is a length-prefixed string. It uses 1 byte for the length followed by up to 255 bytes of data. Key comparison is numeric-aware. If both keys parse as numbers, they are compared as double. Otherwise lexicographic comparison is used. Leaf entry. [key_len:1][key_data:N][RowID:6] Internal entry. [child0:4][key0_len:1][key0:N][child1:4]... Insertions handle splits automatically. They propagate separator keys up to the parent and create a new root when needed. Deletions use lazy marking. They set the RowID to {0, 0}. Cursor operations traverse the leaf chain for ordered iteration. These are bt2_cursor_first, bt2_cursor_next, and bt2_cursor_seek. See B+ Tree."
+    },
+    {
+     "id": "system-catalog",
+     "heading": "System Catalog (catalog_internal.h/c)",
+     "text": "The system catalog stores all metadata in 8 B+ trees. There is one tree per catalog table. CatalogIDTreeKey FormatDescription 0CAT_SYS_DATABASESdb_nameDatabase registry 1CAT_SYS_SCHEMASdb_id:schema_nameSchemas per database 2CAT_SYS_TABLESschema_id:table_nameTables per schema 3CAT_SYS_COLUMNStable_id:col_ordinalColumn definitions 4CAT_SYS_INDEXEStable_id:index_nameIndex metadata 5CAT_SYS_CONSTRAINTStable_id:ordinalCHECK, UNIQUE, PK, FK 6CAT_SYS_USERSusernameUser credentials 7CAT_SYS_GRANTSusername:scope_type:scope_namePrivilege grants Composite keys use zero-padded 10-digit IDs with a : separator. An example is \"0000000001:tablename\". Catalog records are stored as semicolon-delimited strings on slotted pages. The B+ tree entries point to those records. Root page numbers for all 8 trees are persisted in the file header's catalog_roots[] array. See System Catalog."
+    },
+    {
+     "id": "table-api",
+     "heading": "Table API (table_api.h/c)",
+     "text": "The Table API bridges the DML modules and the storage layers. It provides the following operations. Table resolution tapi_resolve() looks up a table by name using the catalog. It returns a TableDesc and arrays of ColumnDesc. Heap operations tapi_heap_insert(), tapi_heap_read(), tapi_heap_delete(), and tapi_heap_update() manage records on slotted pages. Pages are chained through next_page in the page header. New pages are allocated when existing ones are full. PK key building tapi_build_pk_key() extracts the primary key columns from a semicolon-delimited record. It builds the B+ tree key string. A single column gives \"value\". A composite key gives \"val1|val2\". Table scan tapi_scan_begin() and tapi_scan_next() iterate all records ordered by primary key. They use the PK B+ tree cursor. Each cursor step reads the RowID from the B+ tree. Then it fetches the full record from the heap page. Cleanup tapi_free_heap_pages() walks the heap chain and frees all pages. This is used by DROP TABLE. See Table API and DML."
+    },
+    {
+     "id": "data-flow",
+     "heading": "Data Flow",
+     "text": ""
+    },
+    {
+     "id": "flow-insert",
+     "heading": "INSERT",
+     "text": "SQL: INSERT INTO employees (id, name) VALUES (1, 'Alice'); evoparser.y (parse + emit RPN) | Insert.c InsertProcess() | +-- tapi_resolve(\"employees\") --> TableDesc, ColumnDesc[] | +-- tapi_build_pk_key(cols, record) --> \"1\" | +-- bt2_search(pk_tree, \"1\") --> check for duplicate PK | +-- tapi_heap_insert(td, \"1;Alice\") --> RowID{page=5, slot=3} | | | +-- pgm_read_page(heap_page) (via buffer pool) | +-- slot_insert(page_buf, record) | +-- pgm_write_page(heap_page) (via buffer pool) | +-- bt2_insert(pk_tree, \"1\", RowID{5,3}) | +-- find_leaf() --> descend internal nodes +-- write entry to leaf page (split if full) +-- pgm_write_page() (via buffer pool)"
+    },
+    {
+     "id": "flow-select-scan",
+     "heading": "SELECT (full scan)",
+     "text": "SQL: SELECT * FROM employees; Select.c SelectProcess() | +-- tapi_resolve(\"employees\") --> TableDesc, ColumnDesc[] | +-- tapi_scan_begin(td, &cursor) --> positions at first PK | +-- loop: tapi_scan_next(&cursor, pk_key, record_buf) | +-- bt2_cursor_next() --> RowID +-- tapi_heap_read(RowID) --> \"1;Alice\" +-- apply WHERE filter (expression.c) +-- emit row to result set"
+    },
+    {
+     "id": "flow-select-pk",
+     "heading": "SELECT (PK lookup)",
+     "text": "SQL: SELECT * FROM employees WHERE id = 1; Select.c SelectProcess() | +-- tapi_resolve(\"employees\") +-- tapi_build_pk_key(cols, where_val) --> \"1\" +-- bt2_search(pk_tree, \"1\") --> RowID{5,3} +-- tapi_heap_read(RowID{5,3}) --> \"1;Alice\""
+    },
+    {
+     "id": "flow-delete",
+     "heading": "DELETE",
+     "text": "Delete.c DeleteProcess() | +-- tapi_scan_begin/next --> find matching rows +-- bt2_delete(pk_tree, pk_key) --> lazy-mark RowID as {0,0} +-- tapi_heap_delete(RowID) --> slot_delete on page"
+    },
+    {
+     "id": "flow-update",
+     "heading": "UPDATE",
+     "text": "Update.c UpdateProcess() | +-- tapi_scan_begin/next --> find matching rows +-- tapi_heap_update(td, old_rid, new_record) | | | +-- slot_update() if fits in-place --> done | +-- otherwise: slot_delete() + tapi_heap_insert() --> new RowID | +-- if RowID changed: bt2_update(pk_tree, pk_key, new_rid)"
+    },
+    {
+     "id": "initialization",
+     "heading": "Initialization",
+     "text": "Server startup calls db_ensure_root() in DatabaseMgmt.c. This triggers the full initialization sequence. db_ensure_root() | +-- mkdir(\"root/\") create data directory | +-- pgm_init(\"root/evosql.db\") open or create the global file | | | +-- (if file exists) validate magic + page_size, load header | +-- (if file absent) create file, write FileHeader to page 0, | chain pages 1..63 into free list (256KB initial) | +-- cat_init() initialize system catalog | | | +-- (first run) create 8 B+ trees, store roots in file header, | | insert default database (\"evosql\") and schema (\"default\") | +-- (subsequent runs) load tree roots from file header | +-- db_ensure_users() create admin user if absent | | | +-- cat_find_user(\"admin\") | +-- if not found: cat_create_user(\"admin\", hashed_password) | +-- db_ensure_grants() create admin superuser grant | +-- cat_find_grant(\"admin\", DATABASE, \"*\") +-- if not found: cat_create_grant(\"admin\", DATABASE, \"*\", \"ALL\", 1) warningThe buffer pool must be initialized before pgm_init(). The call is bp_init(). All page I/O depends on the buffer pool. The adaptor's server.c calls bp_init() during server startup before it invokes db_ensure_root()."
+    },
+    {
+     "id": "building-testing",
+     "heading": "Building and Testing",
+     "text": "Standalone C tests validate each layer independently. # Page Manager + Slotted Pages (18 tests) gcc -Wall -g -I../evolution/db -o test_page_mgr test_page_mgr.c \\ ../evolution/db/page_mgr.c ../evolution/db/slotted.c \\ ../evolution/db/buffer_pool.c ../evolution/db/error.c \\ ../evolution/db/database_globals.c ../evolution/db/query_context.c -lpthread # B+ Tree (13 tests) gcc -Wall -g -I../evolution/db -o test_btree2 test_btree2.c \\ ../evolution/db/btree2.c ../evolution/db/page_mgr.c \\ ../evolution/db/slotted.c ../evolution/db/buffer_pool.c \\ ../evolution/db/error.c ../evolution/db/database_globals.c \\ ../evolution/db/query_context.c -lpthread # System Catalog (30 tests) gcc -Wall -g -I../evolution/db -o test_catalog test_catalog.c \\ ../evolution/db/catalog_internal.c ../evolution/db/btree2.c \\ ../evolution/db/page_mgr.c ../evolution/db/slotted.c \\ ../evolution/db/buffer_pool.c ../evolution/db/error.c \\ ../evolution/db/database_globals.c ../evolution/db/query_context.c -lpthread Integration tests use the Python test suite against a running server. See the project README for details."
+    }
+   ]
+  }
+ }
+}

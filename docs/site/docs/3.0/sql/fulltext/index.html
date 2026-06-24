@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>12. Full-Text Search | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>12. Full-Text Search</h1>
+<p class="lede">EvolutionDB has a small full-text search feature for one text column. It is built on a shared tokenizer, an inverted B+ tree index, and the <code>MATCH (col) AGAINST ('query')</code> expression. The expression scores each row by how many query words it contains.</p>
+
+<p>Full-text search helps you find rows whose text columns contain one or more search words. It does not match a literal substring or a LIKE pattern. The whole feature is small on purpose. It has three parts. They all share one tokenizer. This way the words seen when the index is built are the same words seen at query time. The three parts are listed below.</p>
+
+<ul>
+<li>A <strong>tokenizer</strong>. It lowercases text, splits on non-alphanumeric boundaries, drops very short words, and removes a small list of English stop words.</li>
+<li>A <strong>full-text index</strong> made with <code>CREATE FULLTEXT INDEX</code>. It stores one inverted-index entry per <em>(word, row)</em> pair in a B+ tree.</li>
+<li>The <strong>MATCH … AGAINST</strong> expression. It checks a query string against a text column and returns a hit count for each row.</li>
+</ul>
+
+<div class="callout">
+<p><strong>How this differs from PostgreSQL.</strong> EvolutionDB does <em>not</em> have PostgreSQL's <code>tsvector</code> and <code>tsquery</code> types. It also has no <code>@@</code> match operator, no GIN or GiST indexes, no configurable text-search dictionaries, no stemming, no weighting, no phrase search, and no <code>ts_rank</code> or <code>ts_headline</code>. The syntax here is closer to MySQL's <code>MATCH (col) AGAINST ('text')</code>. The way it works is simpler than both. Matching is a plain whole-token equality check. There is no stemming and there are no boolean-mode operators. Only the things described on this page work. Everything else is not built yet.</p>
+</div>
+
+<h2 id="tokenization">12.1. Tokenization</h2>
+
+<p>Tokenization turns a raw text value into a list of normalized words. The same routine runs when a full-text index is filled and when <code>MATCH … AGAINST</code> is evaluated. So the two always agree on word boundaries and on letter case.</p>
+
+<p>These rules apply to the input text.</p>
+
+<dl class="params">
+<dt>Word boundaries</dt>
+<dd>A token runs across consecutive <em>alphanumeric</em> bytes. These are ASCII letters and digits. It also runs across any byte with a value of <code>0x80</code> or greater. Every other byte ends the current token. This includes spaces, punctuation, and ASCII symbols.</dd>
+<dt>Case folding</dt>
+<dd>ASCII letters are changed to lowercase. Bytes at or above <code>0x80</code> pass through <strong>unchanged</strong>. These are the bytes that make up UTF-8 multibyte characters. ASCII case folding on UTF-8 bytes has no defined result. So non-ASCII letters are left as they are on purpose.</dd>
+<dt>Minimum length</dt>
+<dd>Tokens shorter than <strong>2 bytes</strong> are discarded.</dd>
+<dt>Stop words</dt>
+<dd>Tokens that match the built-in English stop-word list are discarded. See <a href="#stop-words">12.2</a>.</dd>
+<dt>Maximum token length</dt>
+<dd>A token holds at most <strong>63 bytes</strong> of content. This is the 64-byte buffer minus its terminator. Longer tokens are cut down to that length without warning.</dd>
+<dt>Maximum token count</dt>
+<dd>At most <strong>256 tokens</strong> are taken from a single text value when indexing. At most <strong>32 tokens</strong> are taken from the <code>AGAINST</code> query string.</dd>
+</dl>
+
+<p>The byte-level rule keeps multibyte letters attached to their words. Turkish and other non-Latin letters are examples. But the rule does <em>not</em> change their case. So non-ASCII text matches in a case-sensitive way in this release. A query term must match the stored term byte for byte in its non-ASCII part.</p>
+
+<p>This example shows how a sentence is tokenized.</p>
+
+<pre><code><span class="c-com">-- input:  "The Quick, Brown FOX!"</span>
+<span class="c-com">-- output: ["quick", "brown", "fox"]</span>
+<span class="c-com">--   * "The" -> stop word, dropped</span>
+<span class="c-com">--   * "Quick"/"Brown"/"FOX" -> lowercased</span>
+<span class="c-com">--   * punctuation splits and is discarded</span></code></pre>
+
+<div class="callout">
+<p><strong>Note.</strong> There is no stemming and no lemmatization. <code>running</code>, <code>ran</code>, and <code>run</code> are three different tokens. They will not match each other. There are also no synonyms, no thesaurus expansion, and no accent folding.</p>
+</div>
+
+<h2 id="stop-words">12.2. The stop-word list</h2>
+
+<p>The tokenizer removes a fixed, built-in list of common English words. You cannot change the list in this release. These words are dropped wherever they appear.</p>
+
+<table>
+<thead><tr><th>Stop words (29 entries)</th></tr></thead>
+<tbody>
+<tr><td><code>a</code>, <code>an</code>, <code>and</code>, <code>are</code>, <code>as</code>, <code>at</code>, <code>be</code>, <code>but</code>, <code>by</code>, <code>for</code>, <code>if</code>, <code>in</code>, <code>is</code>, <code>it</code>, <code>no</code>, <code>not</code>, <code>of</code>, <code>on</code>, <code>or</code>, <code>so</code>, <code>that</code>, <code>the</code>, <code>this</code>, <code>to</code>, <code>was</code>, <code>were</code>, <code>will</code>, <code>with</code></td></tr>
+</tbody>
+</table>
+
+<p>Single-character words like <code>I</code> or <code>a</code> are dropped anyway by the two-byte minimum-length rule. The stop-word check runs after lowercasing. So it is case-insensitive for ASCII words.</p>
+
+<h2 id="match-against">12.3. The MATCH … AGAINST expression</h2>
+
+<p>Full-text matching is written with the <code>MATCH (column) AGAINST ('query')</code> construct. It is a scalar expression. It names exactly one column and one quoted query string.</p>
+
+<div class="synopsis">
+<pre class="sig"><code>MATCH ( <span class="c-key">column_name</span> ) AGAINST ( <span class="c-str">'query string'</span> )</code></pre>
+</div>
+
+<p>The grammar accepts one bare column name inside the <code>MATCH (...)</code> parentheses. It accepts one string literal inside <code>AGAINST (...)</code>. The query literal can use single or double quotes. The outer quotes are removed before tokenization.</p>
+
+<h3 id="match-semantics">12.3.1. Evaluation semantics</h3>
+
+<p>When a row is evaluated, EvolutionDB follows these steps.</p>
+
+<ol>
+<li>It reads the named column's value for that row.</li>
+<li>It tokenizes the column value, up to 256 tokens. It also tokenizes the <code>AGAINST</code> string, up to 32 tokens. It uses the rules in <a href="#tokenization">12.1</a>.</li>
+<li>It counts how many <em>query</em> terms appear among the row's terms. Each query term adds at most <code>1</code> to the score. A term that appears many times in the row still counts once.</li>
+<li>It returns that count as the value of the expression.</li>
+</ol>
+
+<p>This is an <strong>any-term (OR) match</strong>. A row scores above zero if it contains <em>any</em> of the query words. The expression has no boolean-mode operators. There is no <code>+</code>, no <code>-</code>, no quoted phrases, and no wildcards. Every word in the query string is treated as its own OR term.</p>
+
+<p>If the column is missing, NULL, or empty, the expression returns <code>0</code>. The same happens if every query term is filtered out. This happens when the terms are all stop words or all too short. Then the score is <code>0</code> for every row.</p>
+
+<h3 id="match-where">12.3.2. MATCH in WHERE, filtering</h3>
+
+<p>In a boolean context like a <code>WHERE</code> clause, the score is turned into a truth value in the usual way. A non-zero score is true. A score of zero is false. So <code>WHERE MATCH(col) AGAINST('term')</code> returns exactly the rows that contain at least one of the query terms.</p>
+
+<pre><code><span class="c-key">CREATE TABLE</span> articles (
+    id    <span class="c-key">INT</span> <span class="c-key">PRIMARY KEY</span>,
+    body  <span class="c-key">VARCHAR</span>(2000)
+);
+
+<span class="c-key">INSERT INTO</span> articles <span class="c-key">VALUES</span>
+    (1, <span class="c-str">'The quick brown fox jumps over the lazy dog'</span>),
+    (2, <span class="c-str">'A fast brown rabbit hops past the fence'</span>),
+    (3, <span class="c-str">'Database engines store rows in pages'</span>);
+
+<span class="c-com">-- rows 1 and 2 both contain "brown"</span>
+<span class="c-key">SELECT</span> id <span class="c-key">FROM</span> articles
+<span class="c-key">WHERE</span> <span class="c-key">MATCH</span>(body) <span class="c-key">AGAINST</span>(<span class="c-str">'brown'</span>);
+
+<span class="c-com">-- any-term match: row 1 ("fox"+"lazy") and row 2 ("rabbit") all qualify</span>
+<span class="c-key">SELECT</span> id <span class="c-key">FROM</span> articles
+<span class="c-key">WHERE</span> <span class="c-key">MATCH</span>(body) <span class="c-key">AGAINST</span>(<span class="c-str">'fox rabbit lazy'</span>);</code></pre>
+
+<h3 id="match-rank">12.3.3. MATCH in the select list and ORDER BY, ranking</h3>
+
+<p><code>MATCH … AGAINST</code> returns a hit count, not just a boolean. So you can show it as a relevance score. You can also use it to order results. A higher score means more distinct query terms were found in the row.</p>
+
+<pre><code><span class="c-com">-- project the score; rank most-relevant first</span>
+<span class="c-key">SELECT</span> id,
+       <span class="c-key">MATCH</span>(body) <span class="c-key">AGAINST</span>(<span class="c-str">'quick brown fox'</span>) <span class="c-key">AS</span> score
+<span class="c-key">FROM</span> articles
+<span class="c-key">ORDER BY</span> <span class="c-key">MATCH</span>(body) <span class="c-key">AGAINST</span>(<span class="c-str">'quick brown fox'</span>) <span class="c-key">DESC</span>;
+
+<span class="c-com">-- combine relevance ranking with a relevance filter</span>
+<span class="c-key">SELECT</span> id
+<span class="c-key">FROM</span> articles
+<span class="c-key">WHERE</span>    <span class="c-key">MATCH</span>(body) <span class="c-key">AGAINST</span>(<span class="c-str">'quick brown fox'</span>)
+<span class="c-key">ORDER BY</span> <span class="c-key">MATCH</span>(body) <span class="c-key">AGAINST</span>(<span class="c-str">'quick brown fox'</span>) <span class="c-key">DESC</span>;</code></pre>
+
+<p>The score you get is an integer. Look at the example data. Row 1 contains <code>quick</code>, <code>brown</code>, and <code>fox</code>. It scores <code>3</code>. Row 2 contains only <code>brown</code>. It scores <code>1</code>.</p>
+
+<div class="callout">
+<p><strong>Note.</strong> PostgreSQL's <code>ts_rank</code> adjusts the score for document length and term frequency. This score does not do that. It is just the number of <em>distinct query terms</em> present in the row. So the highest possible score equals the number of distinct words in the query that are not stop words and not too short.</p>
+</div>
+
+<h2 id="creating-index">12.4. Creating a full-text index</h2>
+
+<p>A full-text index is created with the <code>FULLTEXT</code> keyword on <a href="/3.0/ref/create-index/">CREATE INDEX</a>.</p>
+
+<div class="synopsis">
+<pre class="sig"><code><span class="c-key">CREATE FULLTEXT INDEX</span> <span class="c-key">index_name</span> <span class="c-key">ON</span> <span class="c-key">table_name</span> ( <span class="c-key">column_name</span> )</code></pre>
+</div>
+
+<pre><code><span class="c-key">CREATE FULLTEXT INDEX</span> idx_articles_body
+    <span class="c-key">ON</span> articles (body);</code></pre>
+
+<p>Inside, this builds a B+ tree. Each key joins a tokenized word to the row's primary-key value with a unit-separator byte. That byte is <code>0x1F</code>. One <em>(word, primary-key)</em> entry is inserted for each token of the indexed column. This is done for every existing row. The value stored with each key is the row's heap location. This is a classic inverted index. Looking up a word gives you the rows that contain it.</p>
+
+<p>At creation time, EvolutionDB scans the table once. It tokenizes the indexed column for each row. Then it inserts the entries for each token. The build runs under the engine's DML lock. So the table is held still. No MVCC visibility filtering is applied during the build.</p>
+
+<h3 id="index-restrictions">12.4.1. Restrictions</h3>
+
+<dl class="params">
+<dt>Single text column</dt>
+<dd>A full-text index covers exactly one column. That column must hold text. The index column list is parsed in a general way. But the full-text build path uses one named column. The named column must exist on the table. If it does not, the statement fails with a <em>column not found</em> error.</dd>
+<dt>No <code>IF NOT EXISTS</code>, <code>UNIQUE</code>, or <code>USING HASH</code></dt>
+<dd>The <code>FULLTEXT</code> form is its own grammar production. It does not work with the unique, hash, or <code>IF NOT EXISTS</code> forms of <code>CREATE INDEX</code>.</dd>
+<dt>Inline table-definition form</dt>
+<dd>A <code>FULLTEXT INDEX (col)</code> or <code>FULLTEXT KEY (col)</code> clause is also accepted inside a <code>CREATE TABLE</code> definition. This is for compatibility. There it is recorded as a text-index column.</dd>
+</dl>
+
+<h2 id="index-maintenance">12.5. Index maintenance and the query path</h2>
+
+<p>This release has two limits. You should understand them together. They affect how much you can rely on a full-text index. They also affect whether you should rely on it at all.</p>
+
+<div class="callout">
+<p><strong>Important. The index is not used by query evaluation.</strong> In this release, <code>MATCH … AGAINST</code> always works by reading each candidate row's column value from the heap. It tokenizes that value on the fly. It does <em>not</em> read the inverted B+ tree. You can create and store the full-text index. But it does not make <code>MATCH</code> queries faster yet. Results are always correct because they come from the live row data. They are just produced by a per-row scan and not by an index lookup.</p>
+</div>
+
+<div class="callout">
+<p><strong>Important. The index is not kept up to date on its own.</strong> The index is not updated step by step on <code>INSERT</code>, <code>UPDATE</code>, and <code>DELETE</code>. That feature is not built. The index shows the rows that were present when it was built. After large data changes, drop the index and create it again with <code>CREATE FULLTEXT INDEX</code> to refresh it. When a full-text index is created, the server prints a note to remind you of this.</p>
+</div>
+
+<p>So for now, you can use <code>MATCH … AGAINST</code> for filtering and ranking <em>without</em> creating an index. The expression works on its own. Creating the index does not change query results or speed. It is storage put in place for a future index-backed lookup path.</p>
+
+<h2 id="reference">12.6. Reference summary</h2>
+
+<h3 id="reference-keywords">12.6.1. Keywords and syntax</h3>
+
+<dl class="params">
+<dt><code>MATCH ( col ) AGAINST ( 'query' )</code></dt>
+<dd>Scalar expression. It returns the integer count of distinct query terms found in <code>col</code> for the current row. You can use it in <code>SELECT</code>, <code>WHERE</code>, and <code>ORDER BY</code>.</dd>
+<dt><code>CREATE FULLTEXT INDEX name ON table ( col )</code></dt>
+<dd>Builds an inverted B+ tree index over the tokenized words of one text column. See <a href="/3.0/ref/create-index/">CREATE INDEX</a>.</dd>
+<dt><code>FULLTEXT INDEX ( col )</code> / <code>FULLTEXT KEY ( col )</code></dt>
+<dd>Inline full-text index clause. It is accepted inside <a href="/3.0/ref/create-table/">CREATE TABLE</a>.</dd>
+</dl>
+
+<h3 id="reference-limits">12.6.2. Tokenizer limits</h3>
+
+<table>
+<thead><tr><th>Limit</th><th>Value</th><th>Applies to</th></tr></thead>
+<tbody>
+<tr><td>Minimum token length</td><td>2 bytes</td><td>indexing and querying</td></tr>
+<tr><td>Maximum token length</td><td>63 bytes (truncated)</td><td>indexing and querying</td></tr>
+<tr><td>Maximum tokens per indexed value</td><td>256</td><td>indexing and the row side of <code>MATCH</code></td></tr>
+<tr><td>Maximum tokens per query string</td><td>32</td><td>the <code>AGAINST</code> side of <code>MATCH</code></td></tr>
+<tr><td>Stop-word entries</td><td>29</td><td>indexing and querying</td></tr>
+<tr><td>Key separator byte</td><td><code>0x1F</code> (unit separator)</td><td>index key encoding</td></tr>
+</tbody>
+</table>
+
+<h3 id="reference-errors">12.6.3. Errors</h3>
+
+<dl class="params">
+<dt><code>FULLTEXT: column 'X' not found</code></dt>
+<dd>Raised by <code>CREATE FULLTEXT INDEX</code> when the named column does not exist on the target table. The index is not created in this case.</dd>
+</dl>
+
+<div class="callout">
+<p><strong>Note. Summary of limits.</strong> Full-text search in EvolutionDB 3.0 is whole-token, OR-only matching. Case folding works for ASCII only. There is no stemming, no phrase search, and no boolean-mode operators. There are no configurable dictionaries. There is no ranking weighted by length or term frequency. There is no <code>tsvector</code> or <code>tsquery</code> support. You can create a full-text index. But in this release it is not read by query evaluation and not kept up to date on DML. Rebuild it after large changes. <code>MATCH … AGAINST</code> still returns correct results on its own because it scans live row data directly.</p>
+</div>
+
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

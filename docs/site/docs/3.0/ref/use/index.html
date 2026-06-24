@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>USE | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>USE</h1>
+<p class="lede">USE picks the active database for the current session.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code>USE <span class="opt">[ DATABASE ]</span> <em>database_name</em></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>USE</code> changes which database your next statements run against. EvolutionDB finds every table through the active <em>database</em> and <em>schema</em> pair. When you run <code>USE</code>, all unqualified object lookups point to the named database.</p>
+<p>The target database must already exist in the system catalog. If it does not exist, the command fails with <span class="c-str">database "<em>database_name</em>" does not exist</span>. This is the SQLSTATE for an undefined database. The active database stays the same.</p>
+<p>On a successful switch, the active schema also <strong>resets to <code>default</code></strong>. Any earlier schema choice is dropped by the switch. For example, a choice made with <code>SET SCHEMA</code> is lost. If you want a non-default schema in the new database, you must choose it again after the switch.</p>
+<p>The optional <code>DATABASE</code> keyword is only for looks. The grammar accepts both <code>USE mydb</code> and <code>USE DATABASE mydb</code>. They behave the same way.</p>
+<div class="callout">
+<p><strong>Note:</strong> <code>USE</code> changes session state, not stored schema. It is not transactional. A failed statement does not roll it back. It takes effect right away for the connection that runs it. It stays in effect until the next <code>USE</code>. It also ends when the connection closes.</p>
+</div>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt><code>DATABASE</code></dt>
+<dd>Optional noise keyword. It is there only to read well and to feel familiar in the MySQL style. It does not change behavior. Both <code>USE name</code> and <code>USE DATABASE name</code> do the same thing.</dd>
+<dt><code>database_name</code></dt>
+<dd>The name of the database to make active. It must be a database that already exists in the system catalog. The lookup runs against the catalog. A missing database gives an error. It does not create one. After a successful switch, the active schema resets to <code>default</code>.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>This example switches to a database named <code>sales</code> using the short form.</p>
+<pre><code><span class="c-key">USE</span> sales;</code></pre>
+<p>This example uses the optional <code>DATABASE</code> keyword to do the same switch.</p>
+<pre><code><span class="c-key">USE</span> <span class="c-key">DATABASE</span> sales;</code></pre>
+<p>This example creates a database and then starts working inside it. The switch resets the schema to <code>default</code>, so the <code>CREATE TABLE</code> below goes into <code>sales.default</code>.</p>
+<pre><code><span class="c-key">CREATE</span> <span class="c-key">DATABASE</span> sales;
+<span class="c-key">USE</span> sales;
+<span class="c-key">CREATE</span> <span class="c-key">TABLE</span> orders (
+    id      <span class="c-key">INT</span> <span class="c-key">PRIMARY KEY</span>,
+    total   <span class="c-key">DECIMAL</span>(12, 2)
+);</code></pre>
+<p>This example shows how to choose a non-default schema after switching databases. <code>USE</code> resets the schema first, so the explicit <code>SET SCHEMA</code> must come after it.</p>
+<pre><code><span class="c-key">USE</span> <span class="c-key">DATABASE</span> sales;   <span class="c-com">-- active schema is now "default"</span>
+<span class="c-key">SET</span> <span class="c-key">SCHEMA</span> archive;  <span class="c-com">-- active schema is now "archive"</span></code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p><code>USE</code> is <strong>not part of the SQL standard</strong>. EvolutionDB follows the MySQL way. It is a session-level command that picks the current database. EvolutionDB also accepts the optional <code>DATABASE</code> noise keyword.</p>
+<p><strong>PostgreSQL has no <code>USE</code> statement.</strong> In PostgreSQL a connection is tied to one database for its whole life. To switch databases you must open a new connection. For example, the <code>psql</code> meta-command <code>\c</code> does this. EvolutionDB instead lets one connection move between databases while it runs.</p>
+<p>There is one more difference from PostgreSQL. The EvolutionDB default schema is named <code>default</code>, not <code>public</code>. A successful <code>USE</code> always resets the active schema to <code>default</code>.</p>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
+<li><a href="/3.0/ref/select/">SELECT</a></li>
+<li><a href="/3.0/ref/insert/">INSERT</a></li>
+</ul>
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

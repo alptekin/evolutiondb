@@ -23,7 +23,7 @@ LaunchDaemon plist.
 ## Building locally
 
 ```bash
-# Version defaults to whatever evolution/db/version.h says, so the
+# Version defaults to whatever src/include/version.h says, so the
 # common case needs no second argument.
 ./build.sh /path/to/evosql-server-macos-arm64
 

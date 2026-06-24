@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Page Manager and Slotted Pages | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>Page Manager and Slotted Pages</h1>
+<p class="lede">EvoSQL keeps all data in one global binary file made of fixed-size 4KB pages. The Page Manager owns this file and handles startup, page allocation, page free, and raw I/O. Slotted Pages store variable-length records inside a single data page using a slot directory layout.</p>
+
+<p>The global file holds every database, table, index, and the system catalog. The <strong>Page Manager</strong> lives in <code>page_mgr.h</code> and <code>page_mgr.c</code>. It owns the file. It handles initialization, page allocation and free, and raw I/O. <strong>Slotted Pages</strong> live in <code>slotted.h</code> and <code>slotted.c</code>. They provide variable-length record storage inside individual data pages.</p>
+
+<p>All disk I/O flows through the Clock Sweep buffer pool in <code>buffer_pool.c</code>. The page manager never calls <code>read()</code> or <code>write()</code> directly. It uses <code>bp_read()</code> and <code>bp_write()</code> instead.</p>
+
+<p><strong>Source files:</strong></p>
+<ul>
+<li><code>evolution/db/page_mgr.h</code>, <code>evolution/db/page_mgr.c</code></li>
+<li><code>evolution/db/slotted.h</code>, <code>evolution/db/slotted.c</code></li>
+<li><code>tests/test_page_mgr.c</code> (unit tests)</li>
+</ul>
+
+<h2 id="page-manager">Page Manager</h2>
+
+<h3 id="file-structure">File Structure</h3>
+<p>The global storage file is a sequence of 4096-byte pages. Page 0 is always the <strong>File Header</strong>. All remaining pages are available for allocation. When the server starts, <code>pgm_init()</code> opens the existing file or creates a fresh one. When it opens an existing file, it validates the magic number and the page size. When it creates a fresh file, it makes 64 pages, which is 256KB.</p>
+
+<pre><code> Page 0          Page 1          Page 2             Page N-1
+┌──────────┐   ┌──────────┐   ┌──────────┐       ┌──────────┐
+│FileHeader│   │  Data /  │   │  Data /  │  ...  │  Data /  │
+│ (4096 B) │   │  Free /  │   │  Free /  │       │  Free /  │
+│          │   │  BTree   │   │  BTree   │       │  BTree   │
+└──────────┘   └──────────┘   └──────────┘       └──────────┘</code></pre>
+
+<h3 id="constants">Constants</h3>
+<table>
+<thead><tr><th>Constant</th><th>Value</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td><code>EVO_MAGIC</code></td><td><code>0x45564F44</code></td><td>Magic number (ASCII "EVOD")</td></tr>
+<tr><td><code>EVO_FILE_VERSION</code></td><td><code>1</code></td><td>File format version</td></tr>
+<tr><td><code>EVO_PAGE_SIZE</code></td><td><code>4096</code></td><td>Page size in bytes</td></tr>
+<tr><td><code>PAGE_HEADER_SIZE</code></td><td><code>16</code></td><td>Common page header size</td></tr>
+<tr><td><code>PAGE_USABLE</code></td><td><code>4080</code></td><td>Usable bytes per page (<code>EVO_PAGE_SIZE - PAGE_HEADER_SIZE</code>)</td></tr>
+<tr><td><code>PGM_INITIAL_PAGES</code></td><td><code>64</code></td><td>Pages in a newly created file (256KB)</td></tr>
+<tr><td><code>PGM_GROW_MIN</code></td><td><code>16</code></td><td>Minimum number of pages added when growing the file</td></tr>
+</tbody>
+</table>
+
+<h3 id="page-header">Common Page Header</h3>
+<p>Every page in the file begins with a 16-byte header.</p>
+<pre><code><span class="c-key">typedef struct</span> {
+    <span class="c-key">uint8_t</span>  page_type;    <span class="c-com">/* PageType enum                       */</span>
+    <span class="c-key">uint8_t</span>  flags;        <span class="c-com">/* reserved, must be 0                 */</span>
+    <span class="c-key">uint16_t</span> free_space;   <span class="c-com">/* bytes of free space on this page    */</span>
+    <span class="c-key">uint32_t</span> page_id;      <span class="c-com">/* this page's own number (self-check) */</span>
+    <span class="c-key">uint32_t</span> next_page;    <span class="c-com">/* free list chain or B+ leaf chain    */</span>
+    <span class="c-key">uint32_t</span> prev_page;    <span class="c-com">/* B+ tree leaf backward pointer       */</span>
+} <span class="c-fn">PageHeader</span>;              <span class="c-com">/* 16 bytes                            */</span></code></pre>
+
+<p>The <code>page_type</code> field uses one of five values.</p>
+<pre><code><span class="c-key">typedef enum</span> {
+    <span class="c-fn">PAGE_FREE</span>       = <span class="c-str">0</span>,   <span class="c-com">/* available for allocation           */</span>
+    <span class="c-fn">PAGE_DATA</span>       = <span class="c-str">1</span>,   <span class="c-com">/* slotted page for row storage       */</span>
+    <span class="c-fn">PAGE_BTREE_INT</span>  = <span class="c-str">2</span>,   <span class="c-com">/* B+ tree internal node              */</span>
+    <span class="c-fn">PAGE_BTREE_LEAF</span> = <span class="c-str">3</span>,   <span class="c-com">/* B+ tree leaf node                  */</span>
+    <span class="c-fn">PAGE_OVERFLOW</span>   = <span class="c-str">4</span>    <span class="c-com">/* overflow for large records          */</span>
+} <span class="c-fn">PageType</span>;</code></pre>
+
+<p>The <code>next_page</code> field has two jobs. On free pages it chains into the free list. On B+ tree leaf pages it links to the next leaf in key order. The <code>prev_page</code> field links B+ tree leaves backward.</p>
+
+<h3 id="file-header">File Header (Page 0)</h3>
+<p>Page 0 holds the global file header. It takes up an entire page. A <code>reserved</code> array pads it to fill exactly <code>EVO_PAGE_SIZE</code> bytes.</p>
+<pre><code><span class="c-key">#define</span> <span class="c-fn">CATALOG_ROOT_SLOTS</span> <span class="c-str">16</span>
+
+<span class="c-key">typedef struct</span> {
+    <span class="c-key">uint32_t</span> magic;                             <span class="c-com">/* EVO_MAGIC                          */</span>
+    <span class="c-key">uint16_t</span> version;                           <span class="c-com">/* EVO_FILE_VERSION                   */</span>
+    <span class="c-key">uint16_t</span> page_size;                         <span class="c-com">/* EVO_PAGE_SIZE (4096)               */</span>
+    <span class="c-key">uint32_t</span> total_pages;                       <span class="c-com">/* total pages in file                */</span>
+    <span class="c-key">uint32_t</span> free_list_head;                    <span class="c-com">/* first free page (0 = none)         */</span>
+    <span class="c-key">uint32_t</span> catalog_roots[<span class="c-fn">CATALOG_ROOT_SLOTS</span>]; <span class="c-com">/* root pages for system catalog trees */</span>
+    <span class="c-key">uint32_t</span> next_table_id;                     <span class="c-com">/* auto-increment counter             */</span>
+    <span class="c-key">uint32_t</span> next_schema_id;                    <span class="c-com">/* auto-increment counter             */</span>
+    <span class="c-key">uint32_t</span> next_db_id;                        <span class="c-com">/* auto-increment counter             */</span>
+    <span class="c-key">uint8_t</span>  reserved[<span class="c-fn">EVO_PAGE_SIZE</span> - <span class="c-str">92</span>];      <span class="c-com">/* pad to full page                   */</span>
+} <span class="c-fn">FileHeader</span>;</code></pre>
+
+<p>The fixed fields sum to exactly 92 bytes. The math is <code>4 + 2 + 2 + 4 + 4 + (16 * 4) + 4 + 4 + 4 = 92</code>. The <code>reserved</code> array takes the remaining bytes. That is <code>4096 - 92 = 4004</code> bytes.</p>
+
+<p><strong>Catalog root slots</strong> store the root page number of each system catalog B+ tree. The engine defines eight catalog IDs.</p>
+<pre><code><span class="c-key">typedef enum</span> {
+    <span class="c-fn">CAT_SYS_DATABASES</span>   = <span class="c-str">0</span>,
+    <span class="c-fn">CAT_SYS_SCHEMAS</span>     = <span class="c-str">1</span>,
+    <span class="c-fn">CAT_SYS_TABLES</span>      = <span class="c-str">2</span>,
+    <span class="c-fn">CAT_SYS_COLUMNS</span>     = <span class="c-str">3</span>,
+    <span class="c-fn">CAT_SYS_INDEXES</span>     = <span class="c-str">4</span>,
+    <span class="c-fn">CAT_SYS_CONSTRAINTS</span> = <span class="c-str">5</span>,
+    <span class="c-fn">CAT_SYS_USERS</span>       = <span class="c-str">6</span>,
+    <span class="c-fn">CAT_SYS_GRANTS</span>      = <span class="c-str">7</span>,
+    <span class="c-fn">CAT_MAX</span>             = <span class="c-str">8</span>
+} <span class="c-fn">CatalogID</span>;</code></pre>
+<p>Slots 8 through 15 are reserved for future use.</p>
+
+<p><strong>Auto-increment counters</strong> give globally unique IDs. They are <code>next_table_id</code>, <code>next_schema_id</code>, and <code>next_db_id</code>. They start at 1 in a fresh file. They are incremented atomically through <code>pgm_next_id()</code>.</p>
+
+<h3 id="initialization">Initialization</h3>
+<p><code>pgm_init(filepath)</code> is called once at server startup. It runs after the buffer pool has been initialized with <code>bp_init()</code>. It follows this logic.</p>
+<ol>
+<li>If the file already exists, open it and read page 0. Validate that <code>magic == EVO_MAGIC</code> and <code>page_size == EVO_PAGE_SIZE</code>. If validation fails, return an error.</li>
+<li>If the file does not exist (<code>ENOENT</code>), create it with <code>O_RDWR | O_CREAT | O_TRUNC</code>. Extend it to <code>PGM_INITIAL_PAGES * EVO_PAGE_SIZE</code> bytes through <code>ftruncate()</code>. Write the initial <code>FileHeader</code> to page 0. Then chain pages 1 through <code>PGM_INITIAL_PAGES - 1</code> into the free list.</li>
+<li>If it is already initialized, this is a re-entrant call. Return immediately.</li>
+</ol>
+<p><code>pgm_shutdown()</code> flushes any dirty file header. It calls <code>bp_flush_all()</code> to write all dirty buffer pool pages to disk. Then it closes the file descriptor.</p>
+
+<h3 id="page-allocation">Page Allocation</h3>
+<p><code>pgm_alloc_page(page_type)</code> pops a page from the head of the free list.</p>
+<ol>
+<li>If <code>free_list_head == 0</code>, the list is empty. Grow the file first.</li>
+<li>Read the page at <code>free_list_head</code>. Extract <code>next_page</code> from its header. This becomes the new <code>free_list_head</code>.</li>
+<li>Zero-fill the page buffer. Set <code>page_type</code> to the requested type. Write it back through the buffer pool.</li>
+<li>Flush the updated file header.</li>
+<li>Return the allocated page number. A return value of <code>0</code> indicates an error. Page 0 is never allocatable.</li>
+</ol>
+
+<h3 id="page-deallocation">Page Deallocation</h3>
+<p><code>pgm_free_page(page_no)</code> prepends the page to the free list.</p>
+<ol>
+<li>Refuse to free page 0. It is always the file header.</li>
+<li>Zero-fill the page. Set <code>page_type = PAGE_FREE</code>. Set <code>next_page</code> to the current <code>free_list_head</code>.</li>
+<li>Write the page through the buffer pool.</li>
+<li>Update <code>free_list_head</code> to point to this page.</li>
+<li>Flush the file header.</li>
+</ol>
+<p>The free list is a singly-linked chain through <code>PageHeader.next_page</code>.</p>
+<pre><code> FileHeader                 Page 7           Page 3           Page 12
+┌────────────┐            ┌──────────┐     ┌──────────┐     ┌──────────┐
+│free_list   │            │PAGE_FREE │     │PAGE_FREE │     │PAGE_FREE │
+│ _head = 7 ─┼──────────>│next = 3 ─┼────>│next = 12─┼────>│next = 0  │
+└────────────┘            └──────────┘     └──────────┘     └──────────┘
+                                                             (end of list)</code></pre>
+
+<h3 id="file-growth">File Growth</h3>
+<p>When <code>pgm_alloc_page()</code> finds the free list empty, the internal <code>grow_file()</code> function extends the file.</p>
+<ol>
+<li>Compute the growth amount. It is 50% of the current <code>total_pages</code>. It is at least <code>PGM_GROW_MIN</code>, which is 16 pages.</li>
+<li>Call <code>ftruncate()</code> to extend the file to the new size.</li>
+<li>Chain all newly created pages into the free list through <code>chain_free_pages()</code>. Each page is zero-filled with <code>page_type = PAGE_FREE</code> and linked to the next. The last page in the batch points to the previous <code>free_list_head</code>.</li>
+<li>Update <code>total_pages</code> and <code>free_list_head</code> in the file header.</li>
+</ol>
+
+<h3 id="raw-io">Raw Page I/O</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">pgm_read_page</span>(<span class="c-key">uint32_t</span> page_no, <span class="c-key">void</span> *buf);
+<span class="c-key">int</span> <span class="c-fn">pgm_write_page</span>(<span class="c-key">uint32_t</span> page_no, <span class="c-key">const void</span> *buf);</code></pre>
+<p>These are thin wrappers over <code>bp_read()</code> and <code>bp_write()</code>. They compute the byte offset as <code>page_no * EVO_PAGE_SIZE</code>. They transfer a full 4096-byte page through the buffer pool. They return 0 on success and -1 on error. The buffer must be at least <code>EVO_PAGE_SIZE</code> bytes.</p>
+<p><code>pgm_flush()</code> writes the file header if it is dirty. It then calls <code>bp_flush_all()</code> to force all cached pages to disk.</p>
+
+<h3 id="catalog-roots">Catalog Root Management</h3>
+<pre><code><span class="c-key">uint32_t</span> <span class="c-fn">pgm_get_catalog_root</span>(<span class="c-fn">CatalogID</span> id);
+<span class="c-key">void</span>     <span class="c-fn">pgm_set_catalog_root</span>(<span class="c-fn">CatalogID</span> id, <span class="c-key">uint32_t</span> page_no);</code></pre>
+<p>These read and write entries in the <code>catalog_roots[]</code> array of the file header. A system catalog B+ tree is created for the first time. Its root page number is stored here. This lets the engine find it on later startups. Setting a root flushes the header right away. The system catalog itself is described on the <a href="/3.0/system-catalog/">System Catalog</a> page.</p>
+
+<h3 id="auto-increment">Auto-Increment IDs</h3>
+<pre><code><span class="c-key">uint32_t</span> <span class="c-fn">pgm_next_id</span>(<span class="c-key">int</span> id_type);  <span class="c-com">/* 0 = table, 1 = schema, 2 = database */</span></code></pre>
+<p>This returns the current value and increments the counter atomically. The file header is flushed after each call. This makes the change durable.</p>
+
+<h3 id="thread-safety">Thread Safety</h3>
+<p>A single <code>pthread_mutex_t</code> named <code>g_pgm_lock</code> serializes all page manager operations. This covers allocation, free, catalog root access, and ID generation. Raw I/O does not acquire the page manager mutex. <code>pgm_read_page</code> and <code>pgm_write_page</code> rely on the buffer pool's own mutex for thread safety.</p>
+
+<h3 id="global-state">Global State</h3>
+<p>The page manager is a singleton. It maintains four pieces of state.</p>
+<ul>
+<li><code>g_global_fd</code> is the file descriptor for the global storage file.</li>
+<li><code>g_header</code> is the in-memory copy of the <code>FileHeader</code>, which is page 0.</li>
+<li><code>g_header_dirty</code> is a flag for unsaved header changes.</li>
+<li><code>g_pgm_lock</code> is the mutex for thread safety.</li>
+</ul>
+<p>The file descriptor is exposed through <code>pgm_get_fd()</code>. This is for callers that need direct buffer pool access.</p>
+
+<h3 id="api-summary">Complete API Summary</h3>
+<pre><code><span class="c-com">/* Lifecycle */</span>
+<span class="c-key">int</span>      <span class="c-fn">pgm_init</span>(<span class="c-key">const char</span> *filepath);
+<span class="c-key">void</span>     <span class="c-fn">pgm_shutdown</span>(<span class="c-key">void</span>);
+
+<span class="c-com">/* Page allocation */</span>
+<span class="c-key">uint32_t</span> <span class="c-fn">pgm_alloc_page</span>(<span class="c-key">uint8_t</span> page_type);
+<span class="c-key">void</span>     <span class="c-fn">pgm_free_page</span>(<span class="c-key">uint32_t</span> page_no);
+
+<span class="c-com">/* Raw page I/O */</span>
+<span class="c-key">int</span>      <span class="c-fn">pgm_read_page</span>(<span class="c-key">uint32_t</span> page_no, <span class="c-key">void</span> *buf);
+<span class="c-key">int</span>      <span class="c-fn">pgm_write_page</span>(<span class="c-key">uint32_t</span> page_no, <span class="c-key">const void</span> *buf);
+<span class="c-key">void</span>     <span class="c-fn">pgm_flush</span>(<span class="c-key">void</span>);
+
+<span class="c-com">/* Catalog roots */</span>
+<span class="c-key">uint32_t</span> <span class="c-fn">pgm_get_catalog_root</span>(<span class="c-fn">CatalogID</span> id);
+<span class="c-key">void</span>     <span class="c-fn">pgm_set_catalog_root</span>(<span class="c-fn">CatalogID</span> id, <span class="c-key">uint32_t</span> page_no);
+
+<span class="c-com">/* Auto-increment IDs */</span>
+<span class="c-key">uint32_t</span> <span class="c-fn">pgm_next_id</span>(<span class="c-key">int</span> id_type);
+
+<span class="c-com">/* Utility */</span>
+<span class="c-key">int</span>      <span class="c-fn">pgm_get_fd</span>(<span class="c-key">void</span>);</code></pre>
+
+<h2 id="slotted-pages">Slotted Pages</h2>
+<p>Slotted pages manage variable-length records inside a single 4KB page. The design follows a classic database textbook layout. A slot directory grows forward from the top of the page. Record data grows backward from the bottom. This gives stable record addressing through slot indices even as records are inserted and deleted.</p>
+
+<h3 id="page-layout">Page Layout</h3>
+<pre><code>Byte 0                                                    Byte 4095
+┌──────────────┬───────────────┬────────┬────────┬─  ─┬──────────┐
+│  PageHeader  │ SlottedHeader │ Slot 0 │ Slot 1 │ .. │          │
+│   (16 B)     │    (6 B)      │ (4 B)  │ (4 B)  │    │          │
+├──────────────┴───────────────┴────────┴────────┴─  ─┤          │
+│                                                      │          │
+│                     FREE SPACE                       │          │
+│                                                      │          │
+│         <── free_offset              free_end ──>    │          │
+├──────────────────────────────────────────────────────┤          │
+│              │ Record 1 │ Record 0 │                            │
+│              │ (var)    │ (var)    │                            │
+└──────────────┴──────────┴──────────┴────────────────────────────┘
+
+  Slot directory grows FORWARD (toward higher offsets)  ──────>
+  Record area grows BACKWARD (toward lower offsets)     <──────</code></pre>
+
+<p>When a slotted page is initialized through <code>slot_page_init()</code>, three values are set.</p>
+<ul>
+<li><code>free_offset</code> = <code>PAGE_HEADER_SIZE + SLOTTED_HEADER_SIZE</code> = byte 22, just past the slotted header.</li>
+<li><code>free_end</code> = <code>EVO_PAGE_SIZE</code> = byte 4096, the end of the page.</li>
+<li>Free space = <code>4096 - 22 = 4074</code> bytes, before any slots are allocated.</li>
+</ul>
+<p>The free space is the gap between <code>free_offset</code> and <code>free_end</code>. The <code>free_offset</code> marks the end of the slot directory. The <code>free_end</code> marks the start of the record area. As slots are added, <code>free_offset</code> advances forward by 4 bytes each. As records are placed, <code>free_end</code> retreats backward by the record size.</p>
+
+<h3 id="slotted-header">SlottedHeader</h3>
+<pre><code><span class="c-key">typedef struct</span> {
+    <span class="c-key">uint16_t</span> num_slots;     <span class="c-com">/* total slot entries (including deleted) */</span>
+    <span class="c-key">uint16_t</span> free_offset;   <span class="c-com">/* byte offset of first free byte after slot directory */</span>
+    <span class="c-key">uint16_t</span> free_end;      <span class="c-com">/* byte offset where next record will be placed */</span>
+} <span class="c-fn">SlottedHeader</span>;            <span class="c-com">/* 6 bytes */</span></code></pre>
+<ul>
+<li><code>num_slots</code> counts all slots ever created on this page. This includes slots marked as deleted. It only grows. It never shrinks.</li>
+<li><code>free_offset</code> tracks the end of the slot directory. It equals <code>PAGE_HEADER_SIZE + SLOTTED_HEADER_SIZE + (num_slots * SLOT_ENTRY_SIZE)</code> when no deleted slots have been reused.</li>
+<li><code>free_end</code> tracks the beginning of the record region. Records are placed just below this offset. Then <code>free_end</code> is decremented.</li>
+</ul>
+
+<h3 id="slot-entry">Slot Entry</h3>
+<pre><code><span class="c-key">typedef struct</span> {
+    <span class="c-key">uint16_t</span> offset;   <span class="c-com">/* byte offset of record within page (0 = deleted) */</span>
+    <span class="c-key">uint16_t</span> length;   <span class="c-com">/* record length in bytes */</span>
+} <span class="c-fn">SlotEntry</span>;           <span class="c-com">/* 4 bytes */</span></code></pre>
+<p>A slot with <code>offset == 0</code> is treated as deleted or empty. This works because byte 0 is taken by the <code>PageHeader</code>. No valid record can start there.</p>
+<p>Slot entries are stored one after another starting at byte 22. That is after the <code>PageHeader</code> and the <code>SlottedHeader</code>. Slot <code>i</code> is at byte offset <code>22 + (i * 4)</code>.</p>
+
+<h3 id="rowid">RowID</h3>
+<pre><code><span class="c-key">typedef struct</span> {
+    <span class="c-key">uint32_t</span> page_no;
+    <span class="c-key">uint16_t</span> slot_idx;
+} <span class="c-fn">RowID</span>;               <span class="c-com">/* 6 bytes */</span></code></pre>
+<p>A <code>RowID</code> uniquely identifies any record in the storage file. The pair of page number and slot index is stable across compaction. Slot indices are never renumbered. A <code>RowID</code> with <code>page_no == 0</code> is the "deleted" sentinel. Page 0 is always the file header and never stores records.</p>
+
+<h3 id="max-record">Maximum Record Size</h3>
+<pre><code><span class="c-key">#define</span> <span class="c-fn">SLOT_MAX_RECORD</span>  (<span class="c-fn">EVO_PAGE_SIZE</span> - <span class="c-fn">PAGE_HEADER_SIZE</span> - <span class="c-fn">SLOTTED_HEADER_SIZE</span> - <span class="c-fn">SLOT_ENTRY_SIZE</span>)</code></pre>
+<p>This evaluates to <code>4096 - 16 - 6 - 4 = 4070</code> bytes. A record of this size would use the entire page. That is one slot entry plus the record data. It leaves zero free space.</p>
+
+<h3 id="record-operations">Record Operations</h3>
+
+<h4 id="slot-insert">Insert (slot_insert)</h4>
+<pre><code><span class="c-key">int</span> <span class="c-fn">slot_insert</span>(<span class="c-key">void</span> *page_buf, <span class="c-key">const void</span> *record, <span class="c-key">uint16_t</span> rec_len);</code></pre>
+<p>It returns the slot index on success. It returns -1 if the record does not fit. The algorithm runs as follows.</p>
+<ol>
+<li>Reject zero-length records. Reject records larger than <code>SLOT_MAX_RECORD</code>.</li>
+<li>Scan the slot directory for a deleted slot. A deleted slot has <code>offset == 0</code> and <code>length == 0</code>. If one is found, reuse it. No new slot overhead is needed.</li>
+<li>Calculate the space required. That is <code>rec_len</code> bytes for the record. Add 4 bytes for a new slot entry if a deleted slot is not being reused.</li>
+<li>If the contiguous free gap (<code>free_end - free_offset</code>) is too small, try <code>slot_compact()</code> to defragment the page. If it is still not enough, return -1.</li>
+<li>Place the record at <code>free_end - rec_len</code> and update <code>free_end</code>.</li>
+<li>Write the slot entry. It is either the reused slot or a newly appended entry in the directory.</li>
+<li>Update <code>PageHeader.free_space</code>.</li>
+</ol>
+
+<h4 id="slot-read">Read (slot_read)</h4>
+<pre><code><span class="c-key">int</span> <span class="c-fn">slot_read</span>(<span class="c-key">const void</span> *page_buf, <span class="c-key">uint16_t</span> slot_idx,
+              <span class="c-key">void</span> *out_buf, <span class="c-key">uint16_t</span> out_size);</code></pre>
+<p>It returns the actual record length on success. It returns -1 if the slot index is out of range or the slot is deleted. It copies at most <code>out_size</code> bytes into <code>out_buf</code>. If the record is larger than <code>out_size</code>, it is truncated. The full length is still returned. The caller can then allocate a larger buffer and retry.</p>
+
+<h4 id="slot-delete">Delete (slot_delete)</h4>
+<pre><code><span class="c-key">int</span> <span class="c-fn">slot_delete</span>(<span class="c-key">void</span> *page_buf, <span class="c-key">uint16_t</span> slot_idx);</code></pre>
+<p>It returns 0 on success. It returns -1 if the slot is already deleted or out of range.</p>
+<ol>
+<li>Check if the record being deleted is the physically last record. That is when <code>se->offset == free_end</code>. If so, advance <code>free_end</code> by <code>se->length</code> to reclaim the space right away.</li>
+<li>Mark the slot as deleted. Set <code>offset = 0</code> and <code>length = 0</code>.</li>
+<li>Update <code>PageHeader.free_space</code>.</li>
+</ol>
+<p>Records that are not physically last leave a gap. This is fragmentation. <code>slot_compact()</code> reclaims this space.</p>
+
+<h4 id="slot-update">Update (slot_update)</h4>
+<pre><code><span class="c-key">int</span> <span class="c-fn">slot_update</span>(<span class="c-key">void</span> *page_buf, <span class="c-key">uint16_t</span> slot_idx,
+                <span class="c-key">const void</span> *new_record, <span class="c-key">uint16_t</span> new_len);</code></pre>
+<p>It returns 0 on success. It returns -1 if the record does not fit.</p>
+<ul>
+<li>If <code>new_len &lt;= old_length</code>, the record is overwritten in place. If it is shorter than the original, the tail bytes become wasted space. Compaction can reclaim them. The slot's <code>length</code> is updated to <code>new_len</code>.</li>
+<li>If <code>new_len &gt; old_length</code>, the function returns -1. The caller must do a delete-then-insert. This may land on a different page if the current page lacks space. The table API layer uses this overflow handling pattern. See <a href="/3.0/table-api-and-dml/">Table API and DML</a>.</li>
+</ul>
+
+<h3 id="free-space">Free Space Management</h3>
+
+<h4 id="contiguous-free">Contiguous Free Space</h4>
+<p><code>slot_free_space()</code> returns the contiguous gap between the end of the slot directory and the start of the record area.</p>
+<pre><code><span class="c-key">uint16_t</span> <span class="c-fn">slot_free_space</span>(<span class="c-key">const void</span> *page_buf);
+<span class="c-com">// Returns: free_end - free_offset (or 0 if they've crossed)</span></code></pre>
+<p>This is the maximum amount of data that can be stored without compaction. Inserting a record consumes record bytes. It may also consume 4 bytes for a new slot entry.</p>
+
+<h4 id="fragmentation">Fragmentation</h4>
+<p>Fragmentation happens in two cases.</p>
+<ul>
+<li>A record in the middle of the record area is deleted. This leaves a gap.</li>
+<li>A record is updated to a shorter length. This leaves unused tail bytes.</li>
+</ul>
+<p>These gaps reduce the effective capacity of the page. They do not reduce the value returned by <code>slot_free_space()</code>. That value only measures the contiguous gap. Compaction reclaims this space.</p>
+
+<h4 id="compaction">Compaction (slot_compact)</h4>
+<pre><code><span class="c-key">void</span> <span class="c-fn">slot_compact</span>(<span class="c-key">void</span> *page_buf);</code></pre>
+<p>It defragments the record area. It repacks all active records toward the end of the page and removes gaps.</p>
+<ol>
+<li>Allocate a temporary buffer.</li>
+<li>Walk all slots in order. For each active slot that is not deleted, copy its record to the temporary buffer. Pack records from the end of the page backward.</li>
+<li>Copy the compacted records back into the page buffer.</li>
+<li>Update each slot's <code>offset</code> to its new position.</li>
+<li>Update <code>free_end</code> to reflect the new start of the record area.</li>
+</ol>
+<div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>Compaction preserves slot indices. It never renumbers slots. It never removes deleted slot entries from the directory. This matters because external references point to specific slot indices. Those references include B+ tree leaf entries and RowIDs.</div></div>
+<p>Compaction is triggered automatically by <code>slot_insert()</code>. This happens when the contiguous free gap is too small but the page has enough total free space once fragmented gaps are counted.</p>
+
+<h3 id="active-count">Active Record Count</h3>
+<pre><code><span class="c-key">uint16_t</span> <span class="c-fn">slot_active_count</span>(<span class="c-key">const void</span> *page_buf);</code></pre>
+<p>It returns the number of slots that are not deleted. It scans the directory and counts entries where <code>offset != 0</code>.</p>
+
+<h3 id="caller-responsibilities">Caller Responsibilities</h3>
+<p>All slotted page functions work on an in-memory page buffer. They do <strong>not</strong> read from or write to disk. The caller must do two things.</p>
+<ol>
+<li>Read the page into a buffer through <code>pgm_read_page()</code> before operating on it.</li>
+<li>Call <code>pgm_write_page()</code> after modifying the page. This persists changes through the buffer pool.</li>
+</ol>
+<p>This design gives callers full control over I/O batching. It also allows several modifications to a page before a single write.</p>
+
+<h3 id="layout-example">Detailed Layout Example</h3>
+<p>Three records are inserted. R0 is 100 bytes. R1 is 50 bytes. R2 is 200 bytes. Then R1 is deleted.</p>
+<pre><code>Byte:  0          16   22   26   30   34                           3746  3846  3946 4096
+       ┌──────────┬────┬────┬────┬────┬─────────────────────────────┬─────┬─────┬─────┐
+       │PageHeader│Slot│ S0 │ S1 │ S2 │        FREE SPACE           │ R2  │(gap)│ R0  │
+       │  (16 B)  │Hdr │off │DEL │off │                             │200B │ 50B │100B │
+       │          │6 B │len │0,0 │len │                             │     │     │     │
+       └──────────┴────┴────┴────┴────┴─────────────────────────────┴─────┴─────┴─────┘
+                       │              ↑                             ↑
+                       │         free_offset = 34            free_end = 3746
+                       │
+                       num_slots = 3
+
+  S0: offset=3946, length=100    (points to R0)
+  S1: offset=0,    length=0      (deleted)
+  S2: offset=3746, length=200    (points to R2)
+
+  The 50-byte gap at 3846-3896 is fragmented space from the deleted R1.
+  It will be reclaimed when slot_compact() runs.</code></pre>
+
+<p>After compaction the page looks like this.</p>
+<pre><code>Byte:  0          16   22   26   30   34                                3796  3996 4096
+       ┌──────────┬────┬────┬────┬────┬──────────────────────────────────┬─────┬─────┐
+       │PageHeader│Slot│ S0 │ S1 │ S2 │           FREE SPACE             │ R2  │ R0  │
+       │  (16 B)  │Hdr │off │DEL │off │                                  │200B │100B │
+       │          │6 B │len │0,0 │len │                                  │     │     │
+       └──────────┴────┴────┴────┴────┴──────────────────────────────────┴─────┴─────┘
+                       │              ↑                                  ↑
+                       │         free_offset = 34                 free_end = 3796
+                       │
+                       num_slots = 3 (unchanged)
+
+  S0: offset=3996, length=100    (updated to new position)
+  S1: offset=0,    length=0      (still deleted -- slot not removed)
+  S2: offset=3796, length=200    (updated to new position)
+
+  The 50-byte gap is gone. Free space increased from 3712 to 3762 bytes.</code></pre>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/unified-storage-overview/">Unified Storage Overview</a></li>
+<li><a href="/3.0/bplus-tree/">B+ Tree</a></li>
+<li><a href="/3.0/system-catalog/">System Catalog</a></li>
+<li><a href="/3.0/table-api-and-dml/">Table API and DML</a></li>
+</ul>
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

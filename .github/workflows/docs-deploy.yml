@@ -1,0 +1,68 @@
+# Publish the two documentation sites to AWS.
+#
+# This runs when anything under docs/site changes on main. It syncs each site
+# to its own S3 bucket and invalidates its CloudFront distribution. The version
+# bump pull request lands here on merge, so a merge publishes the new pages.
+#
+# AWS auth uses GitHub OIDC. Create an IAM role that this repository can assume,
+# scoped to s3:PutObject, s3:DeleteObject, and s3:ListBucket on the two buckets,
+# plus cloudfront:CreateInvalidation on the two distributions. Then add its ARN
+# as the repository secret AWS_DEPLOY_ROLE. Without that secret the deploy is
+# skipped with a warning, so the workflow never fails for a missing setup.
+#
+# If you prefer stored keys over OIDC, replace the configure-aws-credentials
+# inputs with aws-access-key-id and aws-secret-access-key from secrets.
+name: docs deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/site/**'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - site: docs
+            bucket: evolutiondb-docs-858185170187
+            dist: E3C1LNYEJP1QOY
+          - site: wiki
+            bucket: evolutiondb-wiki-858185170187
+            dist: EA47V86UCM6UK
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for AWS deploy role
+        id: gate
+        env:
+          ROLE: ${{ secrets.AWS_DEPLOY_ROLE }}
+        run: |
+          if [ -n "$ROLE" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::AWS_DEPLOY_ROLE is not set. Skipping deploy of ${{ matrix.site }}."
+          fi
+
+      - name: Configure AWS credentials
+        if: steps.gate.outputs.ready == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE }}
+          aws-region: eu-central-1
+
+      - name: Sync ${{ matrix.site }} to S3
+        if: steps.gate.outputs.ready == 'true'
+        run: aws s3 sync docs/site/${{ matrix.site }}/ s3://${{ matrix.bucket }}/ --delete
+
+      - name: Invalidate CloudFront
+        if: steps.gate.outputs.ready == 'true'
+        run: aws cloudfront create-invalidation --distribution-id ${{ matrix.dist }} --paths "/*"

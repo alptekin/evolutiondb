@@ -13,7 +13,7 @@
 set -euo pipefail
 
 BIN_SRC="${1:?usage: build.sh <evosql-server> [version] [arch]}"
-# Default to evolution/db/version.h so a local rebuild stamps the same
+# Default to src/include/version.h so a local rebuild stamps the same
 # version that the engine binary reports via `--version`.
 ROOT_REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 VERSION="${2:-$("$ROOT_REPO/scripts/get-version.sh")}"

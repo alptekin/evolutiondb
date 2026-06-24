@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>RECLAIM | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>RECLAIM</h1>
+<p class="lede">RECLAIM, remove dead row versions and tidy up a table's heap storage</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">RECLAIM TABLE</span> <span class="c-com">table_name</span></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>RECLAIM</code> frees the storage used by dead row versions. It also reorganizes the heap pages of a single table on disk. EvolutionDB does not overwrite or remove rows right away on <code>DELETE</code> or <code>UPDATE</code>. Instead it keeps the old versions as MVCC tuples. It keeps them until no running transaction can still see them. <code>RECLAIM</code> cleans up those old versions. It also tightens the on-disk layout that they leave behind.</p>
+<p><code>RECLAIM TABLE</code> does the following work on the named table, in this order.</p>
+<ul>
+<li><strong>Dead tuple removal.</strong> EvolutionDB walks the heap page chain and removes every dead MVCC tuple. A tuple is dead in three cases. First, the transaction that inserted the row was aborted. Second, the transaction that inserted the row crashed and never committed, so the row was left in progress. Third, the transaction that deleted or updated the row has committed, and it is older than the oldest transaction that is still active. Each removed row is also purged from the primary-key B-tree and from every secondary index. Any TOAST overflow chain for the row is freed too.</li>
+<li><strong>XID freezing.</strong> Some live rows were inserted by a transaction id that is old enough. It is older than the freeze cutoff. For those rows, the <code>xmin</code> value is rewritten to the frozen marker. This lets the old transaction ids be reused. It also protects the table against transaction-id wraparound. The table's <code>frozen_xid</code> statistic moves forward to match.</li>
+<li><strong>Index compaction.</strong> The primary-key B-tree is compacted. The deletions above leave tombstones, and earlier lazy deletes leave them too. Those tombstones are physically dropped. Nodes that hold too few entries are merged. Index pages that become empty are freed.</li>
+<li><strong>Page compaction.</strong> Each surviving heap page is compacted inside itself. The live records are packed together. The free space in the page is made contiguous.</li>
+<li><strong>Page merging and freeing.</strong> Live records from sparse pages at the end are moved forward into earlier pages that have room. The primary-key entries for the moved rows are repointed to their new location. Pages that become completely empty are returned to the free list. The heap page chain is then rebuilt over the surviving pages.</li>
+<li><strong>Dropped-column rewrite.</strong> A table may have columns that were logically removed by <code>ALTER TABLE ... DROP COLUMN</code>. If so, every row is rewritten without those columns. The dropped-column metadata is also removed from the catalog. This frees the per-row space that the dropped columns still used.</li>
+</ul>
+<p>When the operation finishes, the dead-tuple counter for the table is reset. A summary line is then printed. It reports how many dead tuples were removed, how many tuples were frozen, how many bytes were compacted, how many records were moved, how many pages were freed, and how many heap pages remain.</p>
+<p>A table may have never received any data, so it has no heap pages. In that case, <code>RECLAIM</code> reports that there is nothing to do and returns successfully.</p>
+
+<div class="callout">
+<p><strong>Automatic RECLAIM.</strong> EvolutionDB can run the same procedure on its own. A background path triggers <code>RECLAIM</code> for a table once its dead-tuple count crosses a threshold. When statistics are available, the threshold is more than 20% of the row count. When no statistics have been gathered, the threshold is more than 50 dead tuples. Running <code>RECLAIM TABLE</code> by hand does exactly the same work on demand.</p>
+</div>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt><code>table_name</code></dt>
+<dd>The name of the table to reclaim. Exactly one table name is required. The grammar does not accept a list of tables. It also does not accept any options or a parenthesized argument list. The name may not match an existing table. In that case, the command fails with an "undefined table" error.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>Reclaim a single table after a large batch of deletes and updates.</p>
+<pre><code><span class="c-key">RECLAIM TABLE</span> orders<span class="c-com">;</span></code></pre>
+
+<p>A common maintenance cycle. First delete the old rows. Then reclaim the space they used.</p>
+<pre><code><span class="c-key">DELETE FROM</span> sessions <span class="c-key">WHERE</span> last_seen <span class="c-key">&lt;</span> <span class="c-str">'2026-01-01'</span><span class="c-com">;</span>
+<span class="c-key">RECLAIM TABLE</span> sessions<span class="c-com">;</span></code></pre>
+
+<p>Reclaim a table after dropping a column. This physically removes the dropped column from every row.</p>
+<pre><code><span class="c-key">ALTER TABLE</span> products <span class="c-key">DROP COLUMN</span> legacy_notes<span class="c-com">;</span>
+<span class="c-key">RECLAIM TABLE</span> products<span class="c-com">;</span></code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p>The SQL standard has no <code>RECLAIM</code> statement. Storage maintenance of this kind is left fully to the implementation.</p>
+<p><code>RECLAIM TABLE</code> is closest in idea to PostgreSQL's <code>VACUUM</code>. It also matches the freezing behavior of <code>VACUUM FREEZE</code>. It removes dead tuples, freezes old transaction ids, and reclaims index and heap space. It differs from PostgreSQL in some important ways.</p>
+<ul>
+<li>The keyword is <code>RECLAIM TABLE</code>, not <code>VACUUM</code>. EvolutionDB does not accept the <code>VACUUM</code> keyword.</li>
+<li>EvolutionDB's grammar accepts only the bare form <code>RECLAIM TABLE table_name</code>. It does not support a parenthesized option list like PostgreSQL's <code>(FULL, ANALYZE, VERBOSE, FREEZE)</code>. It does not accept multiple table names. It does not accept a column list.</li>
+<li>PostgreSQL's ordinary <code>VACUUM</code> reclaims space lazily. It rarely returns pages to the operating system. <code>RECLAIM TABLE</code> works differently. It always compacts and merges heap pages, and it frees emptied pages. This behavior is closer to <code>VACUUM FULL</code>. Freezing happens in the same pass, so a separate <code>FREEZE</code> option is not needed.</li>
+<li>There is no <code>ANALYZE</code> built into <code>RECLAIM</code>. Statistics collection is a separate concern.</li>
+</ul>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/truncate/">TRUNCATE</a></li>
+<li><a href="/3.0/ref/delete/">DELETE</a></li>
+<li><a href="/3.0/ref/update/">UPDATE</a></li>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
+</ul>
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

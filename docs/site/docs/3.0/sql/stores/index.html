@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>16. Document, Graph &amp; Log Stores | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>16. Document, Graph &amp; Log Stores</h1>
+<p class="lede">EvolutionDB has four special stores. They are the document store, the graph store, the message log, and the checkpoint store. Each one is a thin set of verbs on top of a normal engine table. MVCC visibility, row-level security, and the standard error path all work the same way.</p>
+
+<h2 id="overview">16.1. Overview</h2>
+<p>The stores in this chapter are not separate storage engines. Each one is a small layer on top of the same SELECT, INSERT, UPDATE, and DELETE machinery that runs normal SQL. When you create a store, EvolutionDB creates one or more normal backing tables in the current schema. These tables have a fixed column layout. EvolutionDB also records the store in the system catalog. Each store has its own verbs. Examples are <code>DOCUMENT WRITE</code>, <code>GRAPH UPSERT NODE</code>, and <code>LOG APPEND</code>. These verbs turn their arguments into the same internal request structures that a hand-written DML statement would build. Then they call the normal processor.</p>
+
+<p>This design has the same results for all four stores.</p>
+<ul>
+<li>Documents, nodes, edges, log entries, and checkpoints are normal tuples in the binary tuple format. They are stored in slotted pages and indexed by B+ trees.</li>
+<li>Transaction behavior, MVCC snapshot visibility, and the <code>setjmp</code>/<code>longjmp</code> error path work the same way for store operations and for plain DML.</li>
+<li>The backing tables are real tables. Once you know how they are named, you can read them directly with <a href="/3.0/ref/select/">SELECT</a>. This helps when you debug.</li>
+</ul>
+
+<p>The backing-table name for each store comes from the store name in a fixed way.</p>
+
+<table>
+<thead><tr><th>Store kind</th><th>Catalog command</th><th>Backing table(s)</th></tr></thead>
+<tbody>
+<tr><td>Document store</td><td><a href="/3.0/ref/create-doc-store/">CREATE DOCUMENT STORE</a></td><td><code>doc_&lt;name&gt;</code></td></tr>
+<tr><td>Graph store</td><td><a href="/3.0/ref/create-graph-store/">CREATE GRAPH STORE</a></td><td><code>kg_&lt;name&gt;_nodes</code>, <code>kg_&lt;name&gt;_edges</code></td></tr>
+<tr><td>Message log</td><td><a href="/3.0/ref/create-message-log/">CREATE MESSAGE LOG</a></td><td><code>ml_&lt;name&gt;</code></td></tr>
+<tr><td>Checkpoint store</td><td><a href="/3.0/ref/create-checkpoint-store/">CREATE CHECKPOINT STORE</a></td><td><code>ck_&lt;name&gt;</code></td></tr>
+</tbody>
+</table>
+
+<div class="callout">
+<strong>Note.</strong> None of these store types are in the SQL standard. PostgreSQL has no direct equivalent. In PostgreSQL you would use a <code>jsonb</code> column, the third-party <code>pgvector</code> extension, recursive CTEs for graph traversal, or external services. EvolutionDB puts these patterns into dedicated verbs. The comparisons in each section below are there to help you. They are not claims that the features are equal.
+</div>
+
+<h2 id="document-store">16.2. Document Store</h2>
+<p>A document store is a collection of JSON documents. It can also have a vector embedding column for similarity search. You create it with <a href="/3.0/ref/create-doc-store/">CREATE DOCUMENT STORE</a>. This builds a backing table named <code>doc_&lt;name&gt;</code> with a fixed layout.</p>
+
+<dl class="params">
+<dt><code>id</code></dt><dd><code>VARCHAR(255)</code>, <code>NOT NULL</code>, primary key.</dd>
+<dt><code>content</code></dt><dd><code>VARCHAR(8000)</code>, the document body.</dd>
+<dt><code>meta</code></dt><dd><code>VARCHAR(8000)</code>, a JSON-shaped metadata string; may be <code>NULL</code>.</dd>
+<dt><code>embedding</code></dt><dd><code>VECTOR(N)</code>, created <strong>only</strong> when <code>embedding_dim &gt; 0</code>.</dd>
+<dt><code>created_at</code></dt><dd><code>TIMESTAMP</code>, <code>NOT NULL</code>, set to the UTC time of each write.</dd>
+</dl>
+
+<p>The store also records a <em>distance kind</em>. You choose it when you create the store. It is used later to rank vector searches. The accepted values are not case-sensitive.</p>
+
+<table>
+<thead><tr><th>WITH distance</th><th>Internal kind</th><th>Scoring expression</th></tr></thead>
+<tbody>
+<tr><td><code>'cosine'</code> (default)</td><td><code>MEMORY_DIST_COSINE</code></td><td>cosine distance</td></tr>
+<tr><td><code>'l2'</code></td><td><code>MEMORY_DIST_L2</code></td><td>Euclidean (L2) distance</td></tr>
+<tr><td><code>'inner'</code> / <code>'ip'</code></td><td><code>MEMORY_DIST_INNER</code></td><td>inner product</td></tr>
+<tr><td><code>'l1'</code></td><td><code>MEMORY_DIST_L1</code></td><td>Manhattan (L1) distance</td></tr>
+</tbody>
+</table>
+<p>Any unknown distance value falls back to <code>'cosine'</code> without warning.</p>
+
+<h3 id="document-write">16.2.1. Writing documents</h3>
+<p><code>DOCUMENT WRITE</code> runs through <a href="/3.0/ref/insert/">INSERT</a>. The verb supplies <code>id</code> and <code>content</code>. It also supplies <code>meta</code>, or a NULL marker for <code>meta</code>. It supplies the embedding when the store has a vector column. It always supplies a server-generated <code>created_at</code> timestamp. An embedding is only sent when two things are true. The store must have an embedding column, and you must supply a non-empty embedding literal.</p>
+
+<pre><code><span class="c-key">DOCUMENT WRITE INTO</span> articles
+    <span class="c-key">VALUES</span> (<span class="c-str">'a1'</span>, <span class="c-str">'Vector databases explained'</span>,
+            <span class="c-str">'{"lang":"en","tags":["db"]}'</span>);</code></pre>
+
+<p>For a store with an embedding column, give the vector literal as the fourth value.</p>
+<pre><code><span class="c-key">DOCUMENT WRITE INTO</span> articles
+    <span class="c-key">VALUES</span> (<span class="c-str">'a2'</span>, <span class="c-str">'Nearest-neighbor search'</span>,
+            <span class="c-str">'{"lang":"en"}'</span>, <span class="c-str">'[0.12, 0.04, 0.99]'</span>);</code></pre>
+
+<h3 id="document-filter">16.2.2. Filtering documents</h3>
+<p><code>DOCUMENT FILTER</code> returns <code>id</code>, <code>content</code>, <code>meta</code>, and <code>created_at</code>. It also returns <code>embedding</code> when that column is present. It runs through <a href="/3.0/ref/select/">SELECT</a>. The <code>WHERE</code> argument is a Mongo-style filter in JSON. The engine parses it into the same <code>whereExpr</code> tree that a normal <code>WHERE</code> clause produces.</p>
+
+<pre><code><span class="c-key">DOCUMENT FILTER FROM</span> articles
+    <span class="c-key">WHERE</span> <span class="c-str">'{"lang":"en"}'</span> <span class="c-key">LIMIT</span> <span class="c-str">10</span>;</code></pre>
+
+<p>The empty filter <code>'{}'</code> is the all-documents wildcard. It parses with no error but makes no clauses. So the <code>SELECT</code> below it runs with no <code>WHERE</code> restriction. A <code>LIMIT</code> is applied only when it is greater than zero.</p>
+
+<h3 id="document-search">16.2.3. Vector search</h3>
+<p><code>DOCUMENT SEARCH</code> ranks documents by similarity. It only works on a store that has an embedding column. If the store has no embedding column, it fails with SQLSTATE <code>42P01</code>. The verb returns <code>id</code>, <code>content</code>, <code>meta</code>, and a computed <code>score</code> column. The score uses the store's distance kind. It compares the <code>embedding</code> column with the query vector you supply. You can add a Mongo-style filter to narrow the set of candidates.</p>
+
+<pre><code><span class="c-key">DOCUMENT SEARCH</span> articles
+    <span class="c-key">USING VECTOR</span> <span class="c-str">'[0.10, 0.05, 0.98]'</span>
+    <span class="c-key">WHERE</span> <span class="c-str">'{"lang":"en"}'</span>
+    <span class="c-key">LIMIT</span> <span class="c-str">5</span>;</code></pre>
+
+<div class="callout">
+<strong>Note, client-side ordering.</strong> In this release <code>DOCUMENT SEARCH</code> returns the <code>score</code> column. It does not run a server-side <code>ORDER BY</code> on it. The caller must sort on the score column on the client side. A server-side <code>ORDER BY</code> on the score expression is planned. So a <code>LIMIT</code> caps the candidate rows that get a score. It does not give you the top-K by distance.
+</div>
+
+<h3 id="document-delete">16.2.4. Deleting documents</h3>
+<p><code>DOCUMENT DELETE</code> runs through <a href="/3.0/ref/delete/">DELETE</a>. It <strong>requires</strong> a filter argument. If you leave the filter out, it raises SQLSTATE <code>42601</code>. This is a deliberate guardrail. To wipe a whole store you must pass the wildcard <code>'{}'</code> on purpose. The engine turns it into a <code>1 = 1</code> sentinel predicate. This lets the delete path tell "delete all on purpose" apart from "missing WHERE clause".</p>
+
+<pre><code><span class="c-com">-- delete one matching document</span>
+<span class="c-key">DOCUMENT DELETE FROM</span> articles <span class="c-key">WHERE</span> <span class="c-str">'{"lang":"de"}'</span>;
+
+<span class="c-com">-- intentionally wipe the whole store</span>
+<span class="c-key">DOCUMENT DELETE FROM</span> articles <span class="c-key">WHERE</span> <span class="c-str">'{}'</span>;</code></pre>
+
+<p>You remove a document store and its backing table with <code>DROP DOCUMENT STORE</code>. This drops the <code>doc_&lt;name&gt;</code> table and removes the store from the registry.</p>
+
+<h2 id="graph-store">16.3. Graph Store</h2>
+<p>A graph store is a <strong>bitemporal knowledge graph</strong>. You create it with <a href="/3.0/ref/create-graph-store/">CREATE GRAPH STORE</a>. It keeps two backing tables.</p>
+
+<dl class="params">
+<dt><code>kg_&lt;name&gt;_nodes</code></dt>
+<dd><code>id</code> <code>VARCHAR(255)</code> PK NOT NULL, <code>type</code> <code>VARCHAR(64)</code>, <code>props</code> <code>VARCHAR(8000)</code> (JSON-shaped, may be NULL), <code>valid_from</code> <code>TIMESTAMP</code> NOT NULL.</dd>
+<dt><code>kg_&lt;name&gt;_edges</code></dt>
+<dd><code>id</code> <code>BIGINT</code> PK AUTO_INCREMENT, <code>src</code> / <code>dst</code> <code>VARCHAR(255)</code> NOT NULL, <code>rel</code> <code>VARCHAR(128)</code> NOT NULL, <code>props</code> <code>VARCHAR(8000)</code>, <code>valid_from</code> <code>TIMESTAMP</code> NOT NULL, and <code>invalid_at</code> <code>TIMESTAMP</code> where <code>NULL</code> means "currently active".</dd>
+</dl>
+
+<p>The <code>invalid_at</code> column is the heart of the temporal model. Edges are never updated in place to change their meaning. Instead, you replace an edge. The old version is closed by stamping its <code>invalid_at</code>. A fresh row then records the new fact. This lets you answer "what did the graph look like at time <em>T</em>".</p>
+
+<h3 id="graph-upsert-node">16.3.1. Upserting nodes</h3>
+<p><code>GRAPH UPSERT NODE</code> sets the latest <code>type</code> and <code>props</code> for a node id. First it looks up the id in the nodes table's primary-key B+ tree. If the node exists, it runs an <a href="/3.0/ref/update/">UPDATE</a> in place. This avoids a delete-then-insert round-trip. That round-trip works badly with same-transaction MVCC visibility. If the node does not exist, it runs an <a href="/3.0/ref/insert/">INSERT</a> for a new row. When you give no <code>type</code>, the node type defaults to the literal <code>node</code>. The <code>valid_from</code> stamp is set to the current UTC time on every upsert.</p>
+
+<pre><code><span class="c-key">GRAPH UPSERT NODE INTO</span> kg
+    <span class="c-key">VALUES</span> (<span class="c-str">'person:alice'</span>, <span class="c-str">'Person'</span>, <span class="c-str">'{"name":"Alice"}'</span>);</code></pre>
+
+<h3 id="graph-upsert-edge">16.3.2. Upserting edges</h3>
+<p><code>GRAPH UPSERT EDGE</code> records a directed, typed relationship. It stores it as a bitemporal triple <code>(src, rel, dst)</code>. It does two steps.</p>
+<ol>
+<li>It runs an <a href="/3.0/ref/update/">UPDATE</a>. This stamps <code>invalid_at = NOW()</code> on any <em>still-live</em> row with the same <code>(src, rel, dst)</code>. Still-live means rows where <code>invalid_at IS NULL</code>. This closes the old version of the fact.</li>
+<li>Then it runs an <a href="/3.0/ref/insert/">INSERT</a> for a fresh edge row with <code>valid_from = NOW()</code> and <code>invalid_at = NULL</code>. The edge <code>id</code> is auto-incremented. You do not supply it.</li>
+</ol>
+
+<pre><code><span class="c-key">GRAPH UPSERT EDGE INTO</span> kg
+    <span class="c-key">VALUES</span> (<span class="c-str">'person:alice'</span>, <span class="c-str">'WORKS_AT'</span>, <span class="c-str">'org:acme'</span>,
+            <span class="c-str">'{"since":2021}'</span>);</code></pre>
+
+<p>Old versions are kept. So the edge table grows as facts change. This is the cost of a graph you can fully audit and travel back in time through.</p>
+
+<h3 id="graph-neighbors">16.3.3. Querying neighbors</h3>
+<p><code>GRAPH NEIGHBORS OF</code> follows outgoing edges from a node. It runs through <a href="/3.0/ref/select/">SELECT</a>. It returns <code>src</code>, <code>rel</code>, <code>dst</code>, <code>props</code>, <code>valid_from</code>, and <code>invalid_at</code>. The <code>OF '&lt;id&gt;'</code> clause is required. If it is missing, you get SQLSTATE <code>42601</code>. The temporal filter depends on whether you give <code>AS OF</code>.</p>
+
+<dl class="params">
+<dt>No <code>AS OF</code></dt>
+<dd>Only currently-live edges are returned. The filter is <code>src = id AND invalid_at IS NULL</code>.</dd>
+<dt>With <code>AS OF ts</code></dt>
+<dd>Edges that were live at that moment are returned. The filter is <code>src = id AND valid_from &lt;= ts AND (invalid_at IS NULL OR invalid_at &gt; ts)</code>.</dd>
+</dl>
+
+<pre><code><span class="c-com">-- current neighbors</span>
+<span class="c-key">GRAPH NEIGHBORS OF</span> <span class="c-str">'person:alice'</span> <span class="c-key">IN</span> kg;
+
+<span class="c-com">-- neighbors as the graph stood at a past moment</span>
+<span class="c-key">GRAPH NEIGHBORS OF</span> <span class="c-str">'person:alice'</span> <span class="c-key">IN</span> kg
+    <span class="c-key">AS OF</span> <span class="c-str">'2024-01-01 00:00:00'</span>;</code></pre>
+
+<div class="callout">
+<strong>Note, depth is single-hop in this release.</strong> The grammar accepts a <code>DEPTH N</code> clause. The default is 1. For now the engine only runs depth-1 traversal as a single <code>SELECT</code>. Multi-hop BFS expansion is planned. Until then, you build depth-2 traversals by making two <code>NEIGHBORS</code> calls and joining the results on the client side.
+</div>
+
+<p>You remove a graph store and both of its backing tables with <code>DROP GRAPH STORE</code>.</p>
+
+<h2 id="message-log">16.4. Message Log</h2>
+<p>A message log is an <strong>append-only chat-history</strong> structure. You create it with <a href="/3.0/ref/create-message-log/">CREATE MESSAGE LOG</a>. It is backed by a table named <code>ml_&lt;name&gt;</code>.</p>
+
+<dl class="params">
+<dt><code>seq</code></dt><dd><code>BIGINT</code> PRIMARY KEY AUTO_INCREMENT, the monotonic sequence number.</dd>
+<dt><code>session_id</code></dt><dd><code>VARCHAR(255)</code>, <code>NOT NULL</code>.</dd>
+<dt><code>role</code></dt><dd><code>VARCHAR(64)</code>, for example <code>user</code> or <code>assistant</code>.</dd>
+<dt><code>content</code></dt><dd><code>VARCHAR(8000)</code>.</dd>
+<dt><code>meta</code></dt><dd><code>VARCHAR(8000)</code>, JSON-shaped, may be <code>NULL</code>.</dd>
+<dt><code>created_at</code></dt><dd><code>TIMESTAMP</code>, <code>NOT NULL</code>, UTC write time.</dd>
+</dl>
+
+<p>The store can also record an optional <code>ttl_days</code> retention hint when you create it. The <code>content</code> column is <code>VARCHAR(8000)</code> on purpose. It is not an unbounded type. This keeps each row small enough to fit inline in the slotted-page format. If you need larger payloads, split the content into parts on the client side.</p>
+
+<h3 id="log-append">16.4.1. Appending entries</h3>
+<p><code>LOG APPEND</code> runs through <a href="/3.0/ref/insert/">INSERT</a> with an explicit column list. The columns are <code>session_id</code>, <code>role</code>, <code>content</code>, <code>meta</code>, and <code>created_at</code>. The engine fills the <code>seq</code> column through its auto-increment path. It sets <code>created_at</code> to the current UTC time. So the caller never supplies them.</p>
+
+<pre><code><span class="c-key">LOG APPEND INTO</span> chat
+    <span class="c-key">VALUES</span> (<span class="c-str">'sess-42'</span>, <span class="c-str">'user'</span>, <span class="c-str">'Hello there'</span>,
+            <span class="c-str">'{"client":"web"}'</span>);</code></pre>
+
+<h3 id="log-read">16.4.2. Reading entries</h3>
+<p><code>LOG READ</code> returns <code>seq</code>, <code>role</code>, <code>content</code>, <code>meta</code>, and <code>created_at</code>. It filters by <code>session_id</code>. It runs through <a href="/3.0/ref/select/">SELECT</a>. The <code>WHERE SESSION = '&lt;sid&gt;'</code> clause is required. If it is missing, you get SQLSTATE <code>42601</code>. You can add a <code>LAST n</code> form to cap the result to the most recent <em>n</em> rows.</p>
+
+<pre><code><span class="c-key">LOG READ FROM</span> chat <span class="c-key">WHERE SESSION</span> = <span class="c-str">'sess-42'</span>;
+
+<span class="c-key">LOG READ FROM</span> chat <span class="c-key">WHERE SESSION</span> = <span class="c-str">'sess-42'</span> <span class="c-key">LAST</span> <span class="c-str">20</span>;</code></pre>
+
+<h3 id="log-truncate-count">16.4.3. Truncating and counting</h3>
+<p><code>LOG TRUNCATE</code> runs through <a href="/3.0/ref/delete/">DELETE</a>. It also requires a <code>WHERE SESSION</code> clause. Without a <code>BEFORE</code> clause it deletes every row for the session. With <code>BEFORE n</code> it deletes only rows whose <code>seq &lt; n</code>. This is the natural way to prune old turns and keep recent history.</p>
+
+<pre><code><span class="c-com">-- drop the whole session</span>
+<span class="c-key">LOG TRUNCATE FROM</span> chat <span class="c-key">WHERE SESSION</span> = <span class="c-str">'sess-42'</span>;
+
+<span class="c-com">-- keep only seq &gt;= 100</span>
+<span class="c-key">LOG TRUNCATE FROM</span> chat <span class="c-key">WHERE SESSION</span> = <span class="c-str">'sess-42'</span> <span class="c-key">BEFORE</span> <span class="c-str">100</span>;</code></pre>
+
+<p><code>LOG COUNT</code> returns the number of entries for a session. It uses a <code>COUNT(*)</code> that runs through <a href="/3.0/ref/select/">SELECT</a>.</p>
+<pre><code><span class="c-key">LOG COUNT FROM</span> chat <span class="c-key">WHERE SESSION</span> = <span class="c-str">'sess-42'</span>;</code></pre>
+
+<div class="callout">
+<strong>Note, append-only by convention.</strong> The log is "append-only" in a simple sense. The verbs only add rows with <code>LOG APPEND</code> or bulk-prune rows with <code>LOG TRUNCATE</code>. There is no in-place update verb. The backing table is a normal table. So the <code>ttl_days</code> retention hint is recorded, but these verbs do not enforce it on their own. You prune on purpose with <code>LOG TRUNCATE</code>.
+</div>
+
+<h2 id="checkpoint-store">16.5. Checkpoint Store</h2>
+<p>A checkpoint store is a native backend for agent state snapshots. Its design follows LangGraph's checkpoint saver. You create it with <a href="/3.0/ref/create-checkpoint-store/">CREATE CHECKPOINT STORE</a>. It is backed by a table named <code>ck_&lt;name&gt;</code> with a fixed eight-column layout.</p>
+
+<dl class="params">
+<dt><code>thread_id</code></dt><dd><code>VARCHAR(255)</code>, <code>NOT NULL</code>.</dd>
+<dt><code>checkpoint_ns</code></dt><dd><code>VARCHAR(255)</code>, the namespace. It can be NULL. An empty string maps to NULL in this engine.</dd>
+<dt><code>checkpoint_id</code></dt><dd><code>VARCHAR(255)</code>, <code>NOT NULL</code>, primary key.</dd>
+<dt><code>parent_id</code></dt><dd><code>VARCHAR(255)</code>.</dd>
+<dt><code>ck_values</code></dt><dd><code>JSON</code>, the serialized checkpoint state. It is named <code>ck_values</code> and not <code>values</code> to avoid the SQL reserved word.</dd>
+<dt><code>metadata</code></dt><dd><code>JSON</code>.</dd>
+<dt><code>parent_config</code></dt><dd><code>JSON</code>.</dd>
+<dt><code>created_at</code></dt><dd><code>TIMESTAMP</code>, set by the engine on each PUT.</dd>
+</dl>
+
+<p><code>CREATE CHECKPOINT STORE</code> accepts an optional <code>WITH (retention = '...')</code> clause. The retention string is recorded with the store. <code>DROP CHECKPOINT STORE</code> accepts <code>CASCADE</code>. In this release the drop always removes the backing table and the registry entry.</p>
+
+<h3 id="checkpoint-put">16.5.1. Writing checkpoints (PUT)</h3>
+<p><code>CHECKPOINT PUT</code> writes one eight-column row through <a href="/3.0/ref/insert/">INSERT</a>. You supply seven fields. They are <code>thread_id</code>, <code>checkpoint_ns</code>, <code>checkpoint_id</code>, <code>parent_id</code>, <code>ck_values</code>, <code>metadata</code>, and <code>parent_config</code>. The engine stamps the eighth field, <code>created_at</code>. Any field may be sent as NULL. There is also a <code>PUT WRITES</code> variant. In this release the application handles the difference between PUT and PUT WRITES.</p>
+
+<pre><code><span class="c-key">CHECKPOINT PUT INTO</span> agent_state
+    <span class="c-key">VALUES</span> (<span class="c-str">'thread-1'</span>, <span class="c-str">''</span>, <span class="c-str">'ckpt-001'</span>, <span class="c-key">NULL</span>,
+            <span class="c-str">'{"step":1}'</span>, <span class="c-str">'{"source":"input"}'</span>, <span class="c-key">NULL</span>);</code></pre>
+
+<h3 id="checkpoint-get-list">16.5.2. Reading checkpoints (GET / LIST)</h3>
+<p>Both read verbs run through <a href="/3.0/ref/select/">SELECT</a>. They use a star projection over the backing table. They use a <code>WHERE thread_id = '...'</code> filter. They use <code>ORDER BY created_at DESC</code>, so the newest row comes first. The two verbs differ as follows.</p>
+
+<dl class="params">
+<dt><code>CHECKPOINT GET</code></dt>
+<dd>Returns the latest checkpoint for a thread with <code>LIMIT 1</code>. You can add an <code>AT '&lt;checkpoint_id&gt;'</code> clause to narrow the filter to one checkpoint. That picks a single fixed row. So the <code>LIMIT</code> is dropped when you give <code>AT</code>.</dd>
+<dt><code>CHECKPOINT LIST</code></dt>
+<dd>Returns the full history for a thread. You can cap it with a positive <code>LIMIT</code>.</dd>
+</dl>
+
+<pre><code><span class="c-key">CHECKPOINT GET FROM</span> agent_state <span class="c-key">WHERE THREAD</span> = <span class="c-str">'thread-1'</span>;
+
+<span class="c-key">CHECKPOINT GET FROM</span> agent_state <span class="c-key">WHERE THREAD</span> = <span class="c-str">'thread-1'</span>
+    <span class="c-key">AT</span> <span class="c-str">'ckpt-001'</span>;
+
+<span class="c-key">CHECKPOINT LIST FROM</span> agent_state <span class="c-key">WHERE THREAD</span> = <span class="c-str">'thread-1'</span>
+    <span class="c-key">LIMIT</span> <span class="c-str">50</span>;</code></pre>
+
+<div class="callout">
+<strong>Note, direct table access.</strong> The DDL commands <code>CREATE</code> and <code>DROP CHECKPOINT STORE</code> and the PUT, GET, and LIST verbs all work on the same <code>ck_&lt;name&gt;</code> table. The backing table uses a <code>ck_</code> prefix on purpose. It does not use a leading-underscore form. The lexer's identifier pattern is <code>[A-Za-z][A-Za-z0-9_]*</code>, which does not allow a leading underscore. This also means you can use the table directly with plain <a href="/3.0/ref/insert/">INSERT</a> and <a href="/3.0/ref/select/">SELECT</a>. See also the <a href="/3.0/ref/checkpoint/">CHECKPOINT</a> reference page.
+</div>
+
+<h2 id="errors">16.6. Common Errors</h2>
+<p>All four stores raise errors through the standard engine error path. Each error has a SQLSTATE code. You will see these codes most often.</p>
+
+<table>
+<thead><tr><th>SQLSTATE</th><th>Meaning in a store context</th></tr></thead>
+<tbody>
+<tr><td><code>42601</code></td><td>Syntax or usage error. The store name is missing, or a required clause is left out. For example, <code>DOCUMENT DELETE</code> without a filter, <code>GRAPH NEIGHBORS</code> without <code>OF</code>, or <code>LOG READ</code>, <code>COUNT</code>, or <code>TRUNCATE</code> without <code>WHERE SESSION</code>.</td></tr>
+<tr><td><code>42704</code></td><td>The store does not exist. Every DML verb can raise this. <code>DROP</code> without <code>IF EXISTS</code> can also raise it.</td></tr>
+<tr><td><code>42710</code></td><td>A store with the same name already exists. This happens on <code>CREATE</code> without the idempotent form.</td></tr>
+<tr><td><code>42P01</code></td><td><code>DOCUMENT SEARCH</code> on a store created without an embedding column.</td></tr>
+<tr><td><code>22023</code></td><td>Invalid Mongo-style filter JSON passed to <code>DOCUMENT FILTER</code>, <code>DOCUMENT SEARCH</code>, or <code>DOCUMENT DELETE</code>.</td></tr>
+</tbody>
+</table>
+
+<h2 id="compatibility">16.7. Compatibility</h2>
+<p>None of the four store types are in the SQL standard. PostgreSQL has no direct counterpart for any of them. They are EvolutionDB extensions. Here are some honest points of contrast.</p>
+<ul>
+<li><strong>Idempotency keyword.</strong> The <code>CREATE ... STORE</code> statements use <code>IF EXISTS</code> as the idempotent form. They do not use PostgreSQL's <code>IF NOT EXISTS</code>. The meaning is the same. It skips creation when the store is already there.</li>
+<li><strong>Fixed schemas.</strong> Every backing table has a fixed column layout. You cannot define it yourself. You cannot add your own columns through the store commands.</li>
+<li><strong>Documents vs. <code>jsonb</code> / <code>pgvector</code>.</strong> PostgreSQL applications join a <code>jsonb</code> column with the third-party <code>pgvector</code> extension. EvolutionDB puts JSON storage and vector search into a single store with <code>DOCUMENT</code> verbs. HNSW build parameters and similar tuning knobs are not exposed.</li>
+<li><strong>Graph traversal.</strong> PostgreSQL writes graph queries with recursive CTEs over user tables. EvolutionDB ships a dedicated bitemporal model. It has <code>invalid_at</code> versioning and an <code>AS OF</code> snapshot filter. Multi-hop traversal is single-hop in this release.</li>
+<li><strong>Vector ordering.</strong> Top-K ranking for <code>DOCUMENT SEARCH</code> is done on the client side for now. Server-side <code>ORDER BY</code> on the score is planned.</li>
+</ul>
+
+<h2 id="see-also">16.8. See Also</h2>
+<ul>
+<li><a href="/3.0/ref/create-doc-store/">CREATE DOCUMENT STORE</a></li>
+<li><a href="/3.0/ref/create-graph-store/">CREATE GRAPH STORE</a></li>
+<li><a href="/3.0/ref/create-message-log/">CREATE MESSAGE LOG</a></li>
+<li><a href="/3.0/ref/create-checkpoint-store/">CREATE CHECKPOINT STORE</a></li>
+<li><a href="/3.0/ref/checkpoint/">CHECKPOINT</a></li>
+<li><a href="/3.0/ref/insert/">INSERT</a> · <a href="/3.0/ref/select/">SELECT</a> · <a href="/3.0/ref/update/">UPDATE</a> · <a href="/3.0/ref/delete/">DELETE</a></li>
+</ul>
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

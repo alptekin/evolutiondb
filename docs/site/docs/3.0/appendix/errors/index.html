@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>A. Error Codes (SQLSTATE) | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>A. Error Codes (SQLSTATE)</h1>
+<p class="lede">Every error EvolutionDB raises carries a five-character SQLSTATE code. This appendix lists the codes the engine actually emits. It tells you what each one means. It also shows how EvolutionDB's vendor numbering differs from PostgreSQL and the SQL standard.</p>
+
+<h2 id="overview">A.1. Overview</h2>
+<p>EvolutionDB follows the SQLSTATE convention from the SQL standard. A code is exactly five characters. It is split into a two-character <em>class</em> and a three-character <em>subclass</em>. Class <code>00</code> means success. Class <code>01</code> is a warning. Class <code>02</code> means "no data". Every other class means an error. Codes go to clients on both protocols.</p>
+<ul>
+<li><strong>PostgreSQL wire protocol</strong> on port <code>5433</code>. The code goes into the <code>C</code> field of the <code>ErrorResponse</code> message. The <code>M</code> field holds the readable message.</li>
+<li><strong>EVO text protocol</strong> on port <code>9967</code>. The code is the first token of an error line. For example, <code>ERR 23505 duplicate key value violates unique constraint</code>.</li>
+</ul>
+<p>Inside the engine, the active code lives in a six-byte field <code>g_err.sqlstate</code>. That is five characters plus a NUL terminator. The code is cleared to an empty string at the start of every statement. The operation module that finds the error sets it. The adaptor copies it into the result set sent back to the client.</p>
+
+<div class="callout">
+<strong>How a code is set in the engine.</strong> Operation modules use one helper macro. It is defined in <code>evolution/db/evosql_errcodes.h</code>.
+<pre><code><span class="c-com">/* sets g_err.sqlstate to the 5-char literal, NUL-terminated */</span>
+<span class="c-key">EVOSQL_SET_SQLSTATE</span>(EVOSQL_ERRCODE_UNIQUE_VIOLATION);</code></pre>
+The macro copies the five characters of the named code. Then it writes the trailing NUL. There is no message catalog. The operation that raised the error supplies the message text on its own.
+</div>
+
+<h2 id="numbering">A.2. The EvolutionDB numbering scheme</h2>
+<p>When the SQL standard fixes a code, EvolutionDB uses that value. When the standard leaves a slot open, each vendor makes its own subclasses. Each vendor keeps its own letter so codes never clash. EvolutionDB keeps the letter <strong><code>E</code></strong>.</p>
+
+<table>
+<thead><tr><th>Vendor</th><th>Subclass marker</th><th>Example</th></tr></thead>
+<tbody>
+<tr><td>SQL standard (ISO)</td><td>numeric subclass</td><td><code>23505</code> unique violation</td></tr>
+<tr><td>PostgreSQL</td><td><code>P</code></td><td><code>42P01</code> undefined table</td></tr>
+<tr><td>MySQL</td><td><code>S</code></td><td><code>HY000</code> / <code>S</code> subclasses</td></tr>
+<tr><td><strong>EvolutionDB</strong></td><td><strong><code>E</code></strong></td><td><code>42E01</code> undefined table</td></tr>
+</tbody>
+</table>
+
+<p>EvolutionDB uses the marker in two ways.</p>
+<dl class="params">
+<dt><code>E</code> vendor subclass within a standard class</dt>
+<dd>Some conditions have no subclass in the standard. For those, EvolutionDB puts an <code>E</code> in the third spot of a known class. Take "undefined table" as an example. Its code is <code>42E01</code>. Class <code>42</code> is the standard's "syntax error or access rule violation" class. This code is the EvolutionDB version of PostgreSQL's <code>42P01</code>.</dd>
+<dt><code>E0</code> to <code>EZ</code> vendor classes</dt>
+<dd>Some conditions have no standard class at all. These include the storage engine, the buffer pool, garbage collection, and ID generation. EvolutionDB owns the whole class range <code>E0</code> through <code>EZ</code> for them. These codes have no SQL-standard or PostgreSQL equivalent.</dd>
+</dl>
+
+<div class="callout">
+<strong>Honest note about legacy literals.</strong> A few code paths are older than the central header. They still emit hard-coded literals in PostgreSQL's <code>P</code> style instead of the <code>E</code> scheme. One is <code>42P01</code> for undefined table. It shows up in some <a href="/3.0/ref/create-table/">CREATE</a> paths and in the PG protocol fallback. Another is <code>08P01</code> for protocol violation in the connection handler. A third is <code>45000</code>. That is the SQL-standard "unhandled user-defined exception" class <code>45</code>. It is the default for the <code>SIGNAL</code> statement. These literals are PostgreSQL-compatible on purpose so existing drivers know them. They live next to the canonical <code>E</code>-scheme codes in <code>evosql_errcodes.h</code>.
+</div>
+
+<h2 id="defaults">A.3. Default and fallback codes</h2>
+<p>Sometimes an operation raises an error but sets no specific SQLSTATE. In that case the adaptor uses a class-level default. It never sends an empty code.</p>
+<dl class="params">
+<dt><code>42000</code>, Syntax Error or Access Rule Violation (generic)</dt>
+<dd>The query executor and the EVO protocol use this as the general fallback. They use it when <code>g_err.sqlstate</code> is empty. Many EVO protocol framing errors report <code>42000</code> directly. These include a bad command, missing arguments, and an invalid SQL length.</dd>
+<dt><code>22000</code>, Data Exception (generic)</dt>
+<dd><a href="/3.0/ref/copy/">COPY</a> row parsing uses this fallback when no more specific data-exception code is available.</dd>
+<dt><code>00000</code>, Successful Completion</dt>
+<dd>The start value of a result set's SQLSTATE. It holds before any error happens.</dd>
+</dl>
+
+<h2 id="standard-classes">A.4. Standard SQLSTATE classes</h2>
+<p>The codes below use their SQL-standard values. A few use EvolutionDB vendor values where noted. Codes marked <em>"emitted"</em> are set by the engine today. The rest are reserved in the header. They are kept there for completeness and protocol compatibility.</p>
+
+<h3 id="class-00-03">A.4.1. Success, warning, and no-data (classes 00, 01, 02, 03)</h3>
+<table>
+<thead><tr><th>SQLSTATE</th><th>Symbol</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>00000</code></td><td>SUCCESSFUL_COMPLETION</td><td>No error.</td></tr>
+<tr><td><code>01000</code></td><td>WARNING</td><td>Generic warning.</td></tr>
+<tr><td><code>01004</code></td><td>WARNING_STRING_TRUNCATION</td><td>A value was silently truncated to fit its target.</td></tr>
+<tr><td><code>02000</code></td><td>NO_DATA</td><td>A statement that expected a row returned none.</td></tr>
+<tr><td><code>03000</code></td><td>SQL_STATEMENT_NOT_YET_COMPLETE</td><td>Statement parsed but not yet ready to execute.</td></tr>
+</tbody>
+</table>
+
+<h3 id="class-08">A.4.2. Connection exceptions (class 08)</h3>
+<table>
+<thead><tr><th>SQLSTATE</th><th>Symbol</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>08000</code></td><td>CONNECTION_EXCEPTION</td><td>Generic connection error.</td></tr>
+<tr><td><code>08001</code></td><td>SQLCLIENT_UNABLE_TO_CONNECT</td><td>Client could not establish a connection.</td></tr>
+<tr><td><code>08003</code></td><td>CONNECTION_DOES_NOT_EXIST</td><td>Operation attempted on a non-existent connection.</td></tr>
+<tr><td><code>08004</code></td><td>SQLSERVER_REJECTED_CONNECTION</td><td>Server refused the connection.</td></tr>
+<tr><td><code>08006</code></td><td>CONNECTION_FAILURE</td><td>Connection dropped. <em>Emitted</em> by the PG and EVO handlers on a read failure or a disconnect.</td></tr>
+<tr><td><code>08E01</code></td><td>PROTOCOL_VIOLATION</td><td>Malformed wire message. This is an EvolutionDB vendor code. It matches PostgreSQL <code>08P01</code>. The connection handler may also emit the literal <code>08P01</code> for driver compatibility.</td></tr>
+</tbody>
+</table>
+
+<h3 id="class-0a">A.4.3. Feature not supported (class 0A)</h3>
+<table>
+<thead><tr><th>SQLSTATE</th><th>Symbol</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>0A000</code></td><td>FEATURE_NOT_SUPPORTED</td><td><em>Emitted</em> when a statement uses a syntactically valid but unimplemented feature.</td></tr>
+</tbody>
+</table>
+
+<h3 id="class-22">A.4.4. Data exceptions (class 22)</h3>
+<table>
+<thead><tr><th>SQLSTATE</th><th>Symbol</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>22000</code></td><td>DATA_EXCEPTION</td><td>Generic data error. <em>Emitted</em> (also the COPY fallback).</td></tr>
+<tr><td><code>22001</code></td><td>STRING_DATA_RIGHT_TRUNCATION</td><td><em>Emitted</em> when a string is too long for its column. For example, inserting 60 chars into <code>VARCHAR(50)</code>.</td></tr>
+<tr><td><code>22003</code></td><td>NUMERIC_VALUE_OUT_OF_RANGE</td><td><em>Emitted</em> when a number exceeds the target type's range.</td></tr>
+<tr><td><code>22007</code></td><td>INVALID_DATETIME_FORMAT</td><td>Date/time literal could not be parsed.</td></tr>
+<tr><td><code>22008</code></td><td>DATETIME_FIELD_OVERFLOW</td><td>A date/time field was out of range.</td></tr>
+<tr><td><code>22012</code></td><td>DIVISION_BY_ZERO</td><td>Division or modulo by zero.</td></tr>
+<tr><td><code>22023</code></td><td>INVALID_PARAMETER_VALUE</td><td><em>Emitted</em> for an out-of-domain parameter or argument value.</td></tr>
+<tr><td><code>22E02</code></td><td>INVALID_TEXT_REPRESENTATION</td><td><em>Emitted</em> when text cannot be cast to the target type. This is an EvolutionDB vendor code. It matches PostgreSQL <code>22P02</code>.</td></tr>
+</tbody>
+</table>
+<pre class="synopsis"><code><span class="c-com">-- raises 22001 (string_data_right_truncation)</span>
+<span class="c-key">CREATE TABLE</span> t (name <span class="c-key">VARCHAR</span>(5));
+<span class="c-key">INSERT INTO</span> t <span class="c-key">VALUES</span> (<span class="c-str">'too-long-value'</span>);
+
+<span class="c-com">-- raises 22012 (division_by_zero)</span>
+<span class="c-key">SELECT</span> 1 / 0;</code></pre>
+
+<h3 id="class-23">A.4.5. Integrity constraint violations (class 23)</h3>
+<p>These are the errors you see most often in daily use. They come from <a href="/3.0/ref/insert/">INSERT</a>, <a href="/3.0/ref/update/">UPDATE</a>, and <a href="/3.0/ref/delete/">DELETE</a>.</p>
+<table>
+<thead><tr><th>SQLSTATE</th><th>Symbol</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>23000</code></td><td>INTEGRITY_CONSTRAINT_VIOLATION</td><td>Generic constraint failure.</td></tr>
+<tr><td><code>23502</code></td><td>NOT_NULL_VIOLATION</td><td><em>Emitted</em> when a NULL is stored in a <code>NOT NULL</code> column.</td></tr>
+<tr><td><code>23503</code></td><td>FOREIGN_KEY_VIOLATION</td><td><em>Emitted</em> when a referenced row is missing. Also emitted when a referenced row is deleted or updated while child rows still exist.</td></tr>
+<tr><td><code>23505</code></td><td>UNIQUE_VIOLATION</td><td><em>Emitted</em> on a duplicate primary-key or unique value.</td></tr>
+<tr><td><code>23514</code></td><td>CHECK_VIOLATION</td><td><em>Emitted</em> when a row fails a <code>CHECK</code> constraint.</td></tr>
+</tbody>
+</table>
+<pre class="synopsis"><code><span class="c-key">CREATE TABLE</span> users (
+  id    <span class="c-key">INT</span> <span class="c-key">PRIMARY KEY</span>,
+  email <span class="c-key">VARCHAR</span>(100) <span class="c-key">NOT NULL UNIQUE</span>,
+  age   <span class="c-key">INT</span> <span class="c-key">CHECK</span> (age &gt;= 0)
+);
+
+<span class="c-key">INSERT INTO</span> users <span class="c-key">VALUES</span> (1, <span class="c-str">'a@x.io'</span>, 30);
+<span class="c-key">INSERT INTO</span> users <span class="c-key">VALUES</span> (1, <span class="c-str">'b@x.io'</span>, 25);  <span class="c-com">-- 23505 unique_violation (duplicate id)</span>
+<span class="c-key">INSERT INTO</span> users <span class="c-key">VALUES</span> (2, <span class="c-key">NULL</span>,     25);  <span class="c-com">-- 23502 not_null_violation</span>
+<span class="c-key">INSERT INTO</span> users <span class="c-key">VALUES</span> (3, <span class="c-str">'c@x.io'</span>, -1);  <span class="c-com">-- 23514 check_violation</span></code></pre>
+
+<h3 id="class-25">A.4.6. Invalid transaction state (class 25)</h3>
+<table>
+<thead><tr><th>SQLSTATE</th><th>Symbol</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>25000</code></td><td>INVALID_TRANSACTION_STATE</td><td>Generic transaction-state error.</td></tr>
+<tr><td><code>25001</code></td><td>ACTIVE_SQL_TRANSACTION</td><td>Operation not allowed inside an open transaction.</td></tr>
+<tr><td><code>25006</code></td><td>READ_ONLY_SQL_TRANSACTION</td><td><em>Emitted</em> when a write is attempted in a read-only transaction.</td></tr>
+<tr><td><code>25E01</code></td><td>NO_ACTIVE_SQL_TRANSACTION</td><td><code>COMMIT</code> or <code>ROLLBACK</code> ran with no transaction open. This is an EvolutionDB vendor code. It matches PostgreSQL <code>25P01</code>. See <a href="/3.0/ref/transaction/">transaction control</a>.</td></tr>
+</tbody>
+</table>
+
+<h3 id="class-28">A.4.7. Invalid authorization (class 28)</h3>
+<table>
+<thead><tr><th>SQLSTATE</th><th>Symbol</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>28000</code></td><td>INVALID_AUTH_SPEC</td><td>Generic authorization failure.</td></tr>
+<tr><td><code>28E01</code></td><td>INVALID_PASSWORD</td><td>Bad password at login. This is an EvolutionDB vendor code. It matches PostgreSQL <code>28P01</code>. See <a href="/3.0/ref/create-user/">CREATE USER</a>.</td></tr>
+</tbody>
+</table>
+
+<h3 id="class-3d-3f">A.4.8. Invalid catalog and schema names (classes 3D, 3F)</h3>
+<table>
+<thead><tr><th>SQLSTATE</th><th>Symbol</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>3D000</code></td><td>UNDEFINED_DATABASE</td><td><em>Emitted</em> when a referenced database does not exist. See <a href="/3.0/ref/create-database/">CREATE DATABASE</a> / <a href="/3.0/ref/use/">USE</a>.</td></tr>
+<tr><td><code>3F000</code></td><td>UNDEFINED_SCHEMA</td><td><em>Emitted</em> when a referenced schema does not exist.</td></tr>
+</tbody>
+</table>
+
+<h3 id="class-40">A.4.9. Transaction rollback (class 40)</h3>
+<table>
+<thead><tr><th>SQLSTATE</th><th>Symbol</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>40000</code></td><td>TRANSACTION_ROLLBACK</td><td>Generic rollback condition.</td></tr>
+<tr><td><code>40001</code></td><td>SERIALIZATION_FAILURE</td><td><em>Emitted</em> when concurrent transactions could not be serialized. It is safe to retry.</td></tr>
+<tr><td><code>40P01</code></td><td>DEADLOCK_DETECTED</td><td><em>Emitted</em> when a deadlock is broken by aborting this transaction. It uses the PostgreSQL-compatible <code>P</code> literal so drivers know it.</td></tr>
+</tbody>
+</table>
+
+<h3 id="class-42">A.4.10. Syntax error or access rule violation (class 42)</h3>
+<p>This class covers parse-time errors. It also covers name-resolution and privilege errors. It is the widest class and holds most of EvolutionDB's vendor <code>E</code>-subclass codes.</p>
+<table>
+<thead><tr><th>SQLSTATE</th><th>Symbol</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>42000</code></td><td>SYNTAX_ERROR_OR_ACCESS_VIOLATION</td><td>Generic; the executor/protocol fallback code.</td></tr>
+<tr><td><code>42601</code></td><td>SYNTAX_ERROR</td><td><em>Emitted</em> on a parse error.</td></tr>
+<tr><td><code>42602</code></td><td>INVALID_NAME</td><td>An identifier is not a valid name.</td></tr>
+<tr><td><code>42611</code></td><td>INVALID_COLUMN_DEFINITION</td><td>Bad column definition in <a href="/3.0/ref/create-table/">CREATE TABLE</a>.</td></tr>
+<tr><td><code>42622</code></td><td>NAME_TOO_LONG</td><td>An identifier exceeds the maximum length.</td></tr>
+<tr><td><code>42701</code></td><td>DUPLICATE_COLUMN</td><td><em>Emitted</em> when a column name is declared twice.</td></tr>
+<tr><td><code>42703</code></td><td>UNDEFINED_COLUMN</td><td><em>Emitted</em> when a referenced column does not exist.</td></tr>
+<tr><td><code>42704</code></td><td>UNDEFINED_OBJECT</td><td><em>Emitted</em> when a referenced object does not exist. This includes an index, a sequence, or a constraint.</td></tr>
+<tr><td><code>42710</code></td><td>DUPLICATE_OBJECT</td><td><em>Emitted</em> when an object of that name already exists.</td></tr>
+<tr><td><code>42803</code></td><td>GROUPING_ERROR</td><td>Invalid use of an aggregate or <code>GROUP BY</code>.</td></tr>
+<tr><td><code>42501</code></td><td>INSUFFICIENT_PRIVILEGE</td><td><em>Emitted</em> when the waterfall privilege check denies access. The check runs in order. First TABLE, then SCHEMA, then DATABASE. See <a href="/3.0/ref/grant/">GRANT</a>.</td></tr>
+<tr><td><code>42846</code></td><td>CANNOT_COERCE</td><td>A value of one type cannot be cast to another.</td></tr>
+<tr><td><code>42E01</code></td><td>UNDEFINED_TABLE</td><td><em>Emitted</em> when a referenced table does not exist. This is an EvolutionDB vendor code. It matches PostgreSQL <code>42P01</code>. Some paths still emit the literal <code>42P01</code>.</td></tr>
+<tr><td><code>42E02</code></td><td>UNDEFINED_PARAMETER</td><td>A referenced bind parameter is undefined.</td></tr>
+<tr><td><code>42E04</code></td><td>DUPLICATE_DATABASE</td><td><em>Emitted</em> when creating a database that already exists.</td></tr>
+<tr><td><code>42E06</code></td><td>DUPLICATE_SCHEMA</td><td><em>Emitted</em> when creating a schema that already exists.</td></tr>
+<tr><td><code>42E07</code></td><td>DUPLICATE_TABLE</td><td><em>Emitted</em> when creating a table that already exists.</td></tr>
+<tr><td><code>42E16</code></td><td>INVALID_TABLE_DEFINITION</td><td>The table definition is invalid as a whole.</td></tr>
+</tbody>
+</table>
+<pre class="synopsis"><code><span class="c-key">SELECT</span> * <span class="c-key">FROM</span> no_such_table;        <span class="c-com">-- 42E01 undefined_table</span>
+<span class="c-key">SELECT</span> missing_col <span class="c-key">FROM</span> users;       <span class="c-com">-- 42703 undefined_column</span>
+<span class="c-key">CREATE TABLE</span> users (id <span class="c-key">INT</span>);          <span class="c-com">-- 42E07 duplicate_table (already exists)</span></code></pre>
+
+<h3 id="class-44">A.4.11. WITH CHECK OPTION violation (class 44)</h3>
+<table>
+<thead><tr><th>SQLSTATE</th><th>Symbol</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>44000</code></td><td>WITH_CHECK_OPTION_VIOLATION</td><td>A view's <code>WITH CHECK OPTION</code> was violated.</td></tr>
+</tbody>
+</table>
+
+<h3 id="class-53-54">A.4.12. Resource and limit errors (classes 53, 54)</h3>
+<table>
+<thead><tr><th>SQLSTATE</th><th>Symbol</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>53000</code></td><td>INSUFFICIENT_RESOURCES</td><td>Generic resource exhaustion.</td></tr>
+<tr><td><code>53100</code></td><td>DISK_FULL</td><td>Out of disk space.</td></tr>
+<tr><td><code>53200</code></td><td>OUT_OF_MEMORY</td><td><em>Emitted</em> by <a href="/3.0/ref/copy/">COPY</a> when an allocation fails.</td></tr>
+<tr><td><code>53300</code></td><td>TOO_MANY_CONNECTIONS</td><td>Connection limit reached.</td></tr>
+<tr><td><code>54000</code></td><td>PROGRAM_LIMIT_EXCEEDED</td><td><em>Emitted</em> when a static engine limit is exceeded.</td></tr>
+<tr><td><code>54001</code></td><td>STATEMENT_TOO_COMPLEX</td><td>Statement exceeds parser/planner limits.</td></tr>
+<tr><td><code>54011</code></td><td>TOO_MANY_COLUMNS</td><td>A table or result has too many columns.</td></tr>
+</tbody>
+</table>
+
+<h3 id="class-55-57-58">A.4.13. Object state, operator intervention, system error (classes 55, 57, 58)</h3>
+<table>
+<thead><tr><th>SQLSTATE</th><th>Symbol</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>55P03</code></td><td>LOCK_NOT_AVAILABLE</td><td><em>Emitted</em> when a requested lock could not be taken. For example, with <code>NOWAIT</code>. It uses the PostgreSQL-compatible <code>P</code> literal.</td></tr>
+<tr><td><code>57000</code></td><td>OPERATOR_INTERVENTION</td><td>An operator or admin action interrupted the statement.</td></tr>
+<tr><td><code>57014</code></td><td>QUERY_CANCELED</td><td><em>Emitted</em> when a query is canceled. For example, by a client cancel request.</td></tr>
+<tr><td><code>58000</code></td><td>SYSTEM_ERROR</td><td><em>Emitted</em> for OS and system-call failures. See the note below.</td></tr>
+<tr><td><code>58030</code></td><td>IO_ERROR</td><td><em>Emitted</em> on a low-level I/O failure.</td></tr>
+</tbody>
+</table>
+
+<h2 id="vendor-classes">A.5. EvolutionDB vendor classes (E0 to EX)</h2>
+<p>These classes have no SQL-standard or PostgreSQL counterpart. They report conditions that are specific to EvolutionDB's storage and runtime internals. The <a href="/3.0/">architecture overview</a> describes those internals. They include unified page storage, the Clock-Sweep buffer pool, and RECLAIM garbage collection.</p>
+
+<table>
+<thead><tr><th>SQLSTATE</th><th>Symbol</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td colspan="3"><strong>Class E0, Storage engine</strong></td></tr>
+<tr><td><code>E0001</code></td><td>PATH_NAME_TRUNCATED</td><td><em>Emitted</em> when a file path is too long and was truncated.</td></tr>
+<tr><td><code>E0002</code></td><td>STORAGE_ENGINE_ERROR</td><td>Generic storage-layer error.</td></tr>
+<tr><td><code>E0003</code></td><td>RECORD_TOO_LARGE</td><td>A record exceeds what a 4 KB page can hold.</td></tr>
+<tr><td><code>E0004</code></td><td>TABLE_FILE_CORRUPTED</td><td>On-disk table data failed validation.</td></tr>
+<tr><td><code>E0005</code></td><td>META_FILE_NOT_FOUND</td><td>A required metadata file is missing.</td></tr>
+<tr><td colspan="3"><strong>Class E1, Buffer pool</strong></td></tr>
+<tr><td><code>E1001</code></td><td>BUFFER_POOL_EVICTION_FAILED</td><td>Clock-Sweep could not evict a page.</td></tr>
+<tr><td><code>E1002</code></td><td>BUFFER_POOL_FULL</td><td>No free or evictable frame available.</td></tr>
+<tr><td colspan="3"><strong>Class E2, RECLAIM / garbage collection</strong></td></tr>
+<tr><td><code>E2001</code></td><td>RECLAIM_IN_PROGRESS</td><td>A <a href="/3.0/ref/reclaim/">RECLAIM</a> is already running.</td></tr>
+<tr><td><code>E2002</code></td><td>RECLAIM_IO_ERROR</td><td>I/O failure during reclamation.</td></tr>
+<tr><td colspan="3"><strong>Class E3, Temporary tables</strong></td></tr>
+<tr><td><code>E3001</code></td><td>TEMP_TABLE_LIMIT</td><td>Temporary-table limit exceeded.</td></tr>
+<tr><td colspan="3"><strong>Class E4, UUID generation</strong></td></tr>
+<tr><td><code>E4001</code></td><td>UUID_GENERATION_FAILED</td><td>UUID could not be generated.</td></tr>
+<tr><td colspan="3"><strong>Class E5, Snowflake ID</strong></td></tr>
+<tr><td><code>E5001</code></td><td>SNOWFLAKE_SEQ_EXHAUSTED</td><td>Per-millisecond sequence exhausted.</td></tr>
+<tr><td><code>E5002</code></td><td>SNOWFLAKE_CLOCK_REGRESSION</td><td>System clock moved backwards.</td></tr>
+<tr><td colspan="3"><strong>Class E6, Query timeout / cancellation</strong></td></tr>
+<tr><td><code>E6001</code></td><td>QUERY_TIMEOUT</td><td>Statement exceeded its time budget.</td></tr>
+<tr><td><code>E6002</code></td><td>STATEMENT_CANCELLED</td><td>Statement was cancelled.</td></tr>
+<tr><td colspan="3"><strong>Class EX, Internal error ("should never happen")</strong></td></tr>
+<tr><td><code>EX000</code></td><td>INTERNAL_ERROR</td><td><em>Emitted</em> for unexpected internal conditions and software bugs. The fatal-error handlers in <code>error.c</code> also set it. Those are <code>err_exit</code> and <code>err_quit</code>.</td></tr>
+<tr><td><code>EX001</code></td><td>DATA_CORRUPTED</td><td>In-memory or on-disk data corruption detected.</td></tr>
+<tr><td><code>EX002</code></td><td>INDEX_CORRUPTED</td><td>A B+ tree index failed an integrity check.</td></tr>
+</tbody>
+</table>
+
+<div class="callout">
+<strong>The internal error handlers.</strong> <code>evolution/db/error.c</code> provides the family of <code>err_*</code> functions. In server mode they do not call <code>exit()</code>. Instead they set a SQLSTATE and run <code>longjmp</code> back to the executor. This way the connection stays alive. System-call failures set <code>58000</code> for SYSTEM_ERROR. Those are <code>err_sys</code> and <code>err_dump</code>. Generic fatal errors set <code>EX000</code> for INTERNAL_ERROR. Those are <code>err_exit</code> and <code>err_quit</code>. If you see <code>EX000</code> in a client, the engine treats it as a bug. Please report it.
+</div>
+
+<h2 id="differences">A.6. Differences from PostgreSQL and the SQL standard</h2>
+<p>EvolutionDB works with PostgreSQL clients on purpose. But it does not copy PostgreSQL's full error-code catalog. Here are the honest differences.</p>
+<ul>
+<li><strong>The vendor marker is <code>E</code>, not <code>P</code>.</strong> PostgreSQL emits <code>42P01</code>, <code>22P02</code>, <code>28P01</code>, or <code>25P01</code>. EvolutionDB's canonical codes are <code>42E01</code>, <code>22E02</code>, <code>28E01</code>, and <code>25E01</code>. A few legacy paths still emit the PostgreSQL <code>P</code> literals for driver compatibility. These are <code>42P01</code>, <code>08P01</code>, <code>40P01</code>, and <code>55P03</code>.</li>
+<li><strong>Far fewer codes than PostgreSQL.</strong> EvolutionDB defines only the codes it needs. Large parts of PostgreSQL's catalog are missing. These include PL/pgSQL classes, configuration-file errors, and FDW errors.</li>
+<li><strong>Vendor classes <code>E0</code> to <code>EX</code> are unique to EvolutionDB.</strong> They describe the page-based storage engine, the buffer pool, RECLAIM, and ID generation. A portable application should not rely on these except for logging.</li>
+<li><strong>No message catalog.</strong> Some systems map an SQLSTATE to a fixed message. EvolutionDB does not. It sets the code and the message separately at each error site. For code that handles errors, match on the SQLSTATE code. Never match on the message text.</li>
+</ul>
+
+<div class="callout">
+<strong>Notes and limitations.</strong>
+<ul>
+<li>Several codes in <code>evosql_errcodes.h</code> are <em>reserved</em>. They are defined for completeness and future use. The engine does not set them yet. Treat the "emitted" notes above as the current, real behavior. The reserved codes may start to appear in future releases.</li>
+<li>The active code is stored in one global field <code>g_err.sqlstate</code>. The executor mutex guards it. It is cleared at the start of each statement. It shows only the most recent error on that connection.</li>
+<li>When no specific code is set, clients see <code>42000</code> as the general code. Inside COPY they see <code>22000</code>. They never see an empty string.</li>
+<li>The PostgreSQL wire protocol always puts the code in the <code>C</code> field. The EVO protocol always puts it first. It is the first token of <code>ERR …</code> and <code>BATCH_ERR …</code> lines.</li>
+</ul>
+</div>
+
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

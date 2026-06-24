@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CREATE JOB | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>CREATE JOB</h1>
+<p class="lede">CREATE JOB adds a scheduled job. The job runs a SQL statement on a cron-style timetable.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">CREATE JOB</span> <span class="opt">[ IF EXISTS ]</span> <em>name</em>
+    <span class="c-key">ON SCHEDULE</span> '<em>min hour dom mon dow</em>'
+    <span class="c-key">DO</span> '<em>sql_statement</em>'</code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>CREATE JOB</code> adds a named scheduled job to the system catalog. A job
+joins a five-field cron expression with one SQL statement. The scheduler checks
+the current minute on the clock. When that minute matches the cron pattern, the
+job is marked as due.</p>
+
+<p>You give both the cron expression and the SQL body as quoted string
+literals. Whitespace and special characters in them follow the lexer's normal
+quoting rules. They do not follow the SQL grammar. The outer quotes are removed
+before the values are stored in the catalog.</p>
+
+<p>New jobs are <strong>enabled</strong> by default. Their last-run
+timestamp is null. You can turn jobs on and off with <code>ALTER JOB ... ENABLE</code> and
+<code>ALTER JOB ... DISABLE</code>. You can remove a job with <code>DROP JOB</code>. You can list jobs with
+<code>SHOW JOBS</code>. That command shows each job's name, cron expression, SQL body,
+enabled flag, and <code>last_run_unix</code> timestamp.</p>
+
+<div class="callout">
+<p><strong>Execution status.</strong> In this release the scheduler does cron
+matching. It also handles persistence, the ENABLE and DISABLE state, and <code>SHOW JOBS</code> introspection.
+When a job's cron pattern matches the current minute, the scheduler updates the
+job's <code>last_run_unix</code> field. You can then check that a tick fired with
+<code>SHOW JOBS</code>. It also logs a line to stderr. Running the job's SQL body
+is not done yet. That part comes in a future release. Do not rely on the SQL in
+<code>DO</code> being run yet.</p>
+</div>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt>IF EXISTS</dt>
+<dd>Do not raise an error if a job with the same <em>name</em> is already
+registered. When the named job exists, the statement succeeds without a message. The
+existing job stays the same. The cron expression and SQL body in the new
+statement are ignored. Note the keyword spelling. EvolutionDB's grammar accepts
+the bare <code>IF EXISTS</code> form here. It does not use PostgreSQL's <code>IF NOT EXISTS</code> form.</dd>
+
+<dt><em>name</em></dt>
+<dd>The identifier of the job to create. It must be unique among scheduled jobs.
+Without <code>IF EXISTS</code>, creating a job whose name already exists raises an
+error. The SQLSTATE is <code>42710</code>.</dd>
+
+<dt>ON SCHEDULE '<em>min hour dom mon dow</em>'</dt>
+<dd>A five-field cron expression given as a quoted string. The fields are
+minute, hour, day-of-month, month, and day-of-week. Spaces or
+tabs separate the fields. Each field is either <code>*</code> or a single
+non-negative integer. The <code>*</code> matches any value. Ranges like <code>1-5</code>, comma lists like <code>1,15,30</code>, and
+step values like <code>*/5</code> are <strong>not</strong> supported.
+<br/><br/>
+Each field has a valid integer range. Minute is <code>0–59</code>. Hour is <code>0–23</code>.
+Day-of-month is <code>1–31</code>. Month is <code>1–12</code>. Day-of-week is <code>0–7</code>, where
+both <code>0</code> and <code>7</code> mean Sunday. Matching is done in UTC.
+An expression that does not parse to exactly five valid fields raises an error.
+The SQLSTATE is <code>22023</code>.</dd>
+
+<dt>DO '<em>sql_statement</em>'</dt>
+<dd>The SQL statement to link with the job. You give it as a quoted string
+literal. It is stored in the catalog exactly as written. The <code>DO</code> body must not be
+empty.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>This example creates a job that runs every day at 03:00 UTC.</p>
+<pre><code><span class="c-key">CREATE JOB</span> nightly_rollup
+    <span class="c-key">ON SCHEDULE</span> <span class="c-str">'0 3 * * *'</span>
+    <span class="c-key">DO</span> <span class="c-str">'INSERT INTO daily_totals SELECT today(), sum(amount) FROM orders'</span>;</code></pre>
+
+<p>This example creates a job that fires at the top of every hour.</p>
+<pre><code><span class="c-key">CREATE JOB</span> hourly_ping
+    <span class="c-key">ON SCHEDULE</span> <span class="c-str">'0 * * * *'</span>
+    <span class="c-key">DO</span> <span class="c-str">'UPDATE heartbeat SET ticked_at = now()'</span>;</code></pre>
+
+<p>This example creates a job only if no job with that name already exists.</p>
+<pre><code><span class="c-key">CREATE JOB IF EXISTS</span> weekly_cleanup
+    <span class="c-key">ON SCHEDULE</span> <span class="c-str">'30 4 * * 0'</span>   <span class="c-com">-- 04:30 every Sunday (dow 0)</span>
+    <span class="c-key">DO</span> <span class="c-str">'DELETE FROM sessions WHERE expired = TRUE'</span>;</code></pre>
+
+<p>This example shows how to inspect, disable, re-enable, and remove a job.</p>
+<pre><code><span class="c-key">SHOW JOBS</span>;
+<span class="c-key">ALTER JOB</span> hourly_ping <span class="c-key">DISABLE</span>;
+<span class="c-key">ALTER JOB</span> hourly_ping <span class="c-key">ENABLE</span>;
+<span class="c-key">DROP JOB</span> <span class="opt">[ IF EXISTS ]</span> hourly_ping;</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p><code>CREATE JOB</code> is not part of the SQL standard. The SQL standard does not define scheduled jobs.</p>
+
+<p>It is also not a PostgreSQL command. Core PostgreSQL has no built-in
+scheduler. The closest thing in PostgreSQL is the third-party <code>pg_cron</code>
+extension. Its <code>cron.schedule('name', '0 3 * * *', 'SQL')</code> function call
+uses the same five-field cron style. EvolutionDB offers this as native DDL
+instead of a function. Its cron evaluator is kept simple on purpose. These are the rules.</p>
+<ul>
+<li>Exactly five fields. Each field is either <code>*</code> or a single integer. No ranges,
+comma lists, or step values. This is unlike <code>pg_cron</code> and standard crontab.</li>
+<li>Day-of-week accepts <code>0</code> and <code>7</code> for Sunday. This follows the POSIX cron style.</li>
+<li>Matching is done in UTC.</li>
+<li>The <code>IF EXISTS</code> spelling here is different from PostgreSQL's usual
+<code>IF NOT EXISTS</code> guard on <code>CREATE</code> statements.</li>
+<li>In this release the job's SQL body is matched and timestamped but not yet
+run. See the note under <a href="#description">Description</a>.</li>
+</ul>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/show/">SHOW</a></li>
+<li><a href="/3.0/ref/create-procedure/">CREATE PROCEDURE</a></li>
+<li><a href="/3.0/ref/call/">CALL</a></li>
+<li><a href="/3.0/ref/create-trigger/">CREATE TRIGGER</a></li>
+</ul>
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

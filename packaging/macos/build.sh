@@ -15,7 +15,7 @@
 set -euo pipefail
 
 BIN_SRC="${1:?usage: build.sh <evosql-server binary> [version]}"
-# Default to the version stamped in evolution/db/version.h so a local
+# Default to the version stamped in src/include/version.h so a local
 # `./build.sh /path/to/binary` ships an installer whose stamp matches
 # the engine binary it carries.
 ROOT="$(cd "$(dirname "$0")" && pwd)"

@@ -37,7 +37,7 @@
     </choice>
 
     <!-- __VERSION__ is substituted by client/macos-installer/build.sh from
-         evolution/db/version.h so this stamp tracks the engine version. -->
+         src/include/version.h so this stamp tracks the engine version. -->
     <pkg-ref id="com.evolutiondb.server.pkg"
              version="__VERSION__"
              onConclusion="none">EvolutionDB.pkg</pkg-ref>
