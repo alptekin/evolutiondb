@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>EvolutionDB Documentation</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+ <h1>EvolutionDB Documentation</h1>
+ <p class="lede">This is the official reference manual for EvolutionDB. EvolutionDB is a SQL engine. It is built to be long-term memory for AI agents. This manual covers version <strong data-evodb-version></strong>.</p>
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>EvolutionDB has only one version line today. That line is 3.0. The version selector is at the top left. It will list more versions when we release them. Each version will have its own copy of this manual.</div></div>
+ <h2 id="parts">Manual</h2>
+ <div class="card-grid">
+ <a class="doc-card" href="/3.0/tutorial/start/"><span class="material-symbols-outlined">school</span><h3>I · Tutorial</h3><p>Install EvolutionDB, connect to it, and run your first queries.</p></a>
+ <a class="doc-card" href="/3.0/sql/syntax/"><span class="material-symbols-outlined">database</span><h3>II · The SQL Language</h3><p>DDL, DML, queries, types, indexes, MVCC, memory, and vectors.</p></a>
+ <a class="doc-card" href="/3.0/admin/install/"><span class="material-symbols-outlined">settings</span><h3>III · Administration</h3><p>Server config, roles, encryption, backup, and maintenance.</p></a>
+ <a class="doc-card" href="/3.0/client/connect/"><span class="material-symbols-outlined">cable</span><h3>IV · Client Interfaces</h3><p>The PostgreSQL wire protocol, the EVO protocol, and the CLI.</p></a>
+ <a class="doc-card" href="/3.0/ref/select/"><span class="material-symbols-outlined">menu_book</span><h3>Reference</h3><p>Every SQL command. Each one has a synopsis, parameters, and examples.</p></a>
+ <a class="doc-card" href="/3.0/appendix/errors/"><span class="material-symbols-outlined">bookmark</span><h3>Appendixes</h3><p>Error codes, data types, and keywords.</p></a>
+ </div>
+ <div class="callout callout-note"><span class="material-symbols-outlined">lan</span><div>Do you want to learn how the source code works inside? See the <a href="https://wiki.evolutiondb.org">code wiki</a>. Do you want to use the client SDKs and connectors? See the <a href="https://developer.evolutiondb.org">developer portal</a>.</div></div>
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

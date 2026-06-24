@@ -1,0 +1,37 @@
+{
+  "site": "wiki",
+  "title": "EvolutionDB Wiki",
+  "comment": "wiki.evolutiondb.org. Engine internals only. Maps each wiki page to the engine source it explains. When a page's sources change between two release tags, the generator asks the model to update that page. Paths are relative to the channel folder.",
+  "watch": [
+    "src/backend/storage",
+    "src/backend/access",
+    "src/server",
+    "src/include/version.h"
+  ],
+  "pages": {
+    "unified-storage-overview": [
+      "src/backend/storage/page_mgr.c",
+      "src/backend/storage/buffer_pool.c",
+      "src/backend/storage/slotted.c",
+      "src/backend/storage/btree2.c",
+      "src/backend/access/table_api.c",
+      "src/backend/access/catalog_internal.c"
+    ],
+    "page-manager-and-slotted-pages": [
+      "src/backend/storage/page_mgr.c",
+      "src/backend/storage/slotted.c",
+      "src/backend/storage/buffer_pool.c"
+    ],
+    "bplus-tree": ["src/backend/storage/btree2.c"],
+    "system-catalog": ["src/backend/access/catalog_internal.c"],
+    "table-api-and-dml": [
+      "src/backend/access/table_api.c",
+      "src/backend/access/tuple_format.c",
+      "src/backend/commands/Insert.c",
+      "src/backend/commands/Select.c",
+      "src/backend/commands/Update.c",
+      "src/backend/commands/Delete.c",
+      "src/backend/commands/Create.c"
+    ]
+  }
+}

@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>21. Triggers &amp; Procedures | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>21. Triggers &amp; Procedures</h1>
+<p class="lede">EvolutionDB stores procedures, functions, and triggers as raw SQL bodies. One text-driven engine runs all of them. The engine replaces parameters and <code>OLD.</code>/<code>NEW.</code> column references with text. It splits the body into statements that follow the control flow. Then it runs each statement against the engine.</p>
+
+<div class="callout">
+<strong>Implementation note.</strong> The procedure language in EvolutionDB is <em>not</em> a compiled PL like PostgreSQL's PL/pgSQL. A body is kept word for word between <code>BEGIN</code> and the matching <code>END</code>. At run time the engine splits it on <code>;</code> and on control-flow keyword boundaries. Then it runs each statement one by one. There is no type system for local variables. There is no plan caching. There is no overloading. A procedure or function is found by its name alone within a schema.
+</div>
+
+<h2 id="overview">21.1. Overview</h2>
+<p>This page covers three kinds of stored objects. The system catalog of the current database and schema holds all of them.</p>
+<dl class="params">
+<dt>Procedure</dt>
+<dd>A named block of SQL with parameters. You run it with <code>CALL</code>. It is stored with its parameter list and body. The executor supports <code>OUT</code>/<code>INOUT</code> parameters and local <code>DECLARE</code> variables.</dd>
+<dt>Function</dt>
+<dd>You create it with <code>CREATE FUNCTION … RETURNS type</code>. Functions use the same catalog and the same body engine as procedures. The return type you declare is saved. Functions are stored next to procedures. The catalog flag <code>is_function</code> tells them apart.</dd>
+<dt>Trigger</dt>
+<dd>A <code>BEFORE</code> or <code>AFTER</code> block tied to one table and one of the <code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code> events. It fires once for each affected row. To run a trigger body, the engine wraps it in a temporary procedure and calls it. So the trigger reuses the full procedure engine. This includes <code>IF</code>, <code>WHILE</code>, <code>SIGNAL</code>, and more.</dd>
+</dl>
+
+<h2 id="create-procedure">21.2. CREATE PROCEDURE / FUNCTION</h2>
+<p>See the reference page <a href="/3.0/ref/create-procedure/">CREATE PROCEDURE</a> for the full grammar. The synopsis below shows exactly what the parser accepts.</p>
+<div class="synopsis">
+<pre><code><span class="c-key">CREATE</span> <span class="opt">[ OR REPLACE ]</span> <span class="c-key">PROCEDURE</span> name <span class="c-key">(</span> <span class="opt">[ param_list ]</span> <span class="c-key">)</span> <span class="opt">[ AS ]</span>
+<span class="c-key">BEGIN</span>
+    body
+<span class="c-key">END</span>
+
+<span class="c-key">CREATE</span> <span class="opt">[ OR REPLACE ]</span> <span class="c-key">FUNCTION</span> name <span class="c-key">(</span> <span class="opt">[ param_list ]</span> <span class="c-key">)</span> <span class="c-key">RETURNS</span> return_type <span class="opt">[ AS ]</span>
+<span class="c-key">BEGIN</span>
+    body
+<span class="c-key">END</span>
+
+<span class="c-com">-- param_list element:</span>
+<span class="opt">[ IN | OUT | INOUT ]</span> param_name data_type</code></pre>
+</div>
+<p>If you leave out the parameter mode, it defaults to <code>IN</code>. Functions accept a fixed set of return types. These are <code>INT</code>/<code>INTEGER</code>, <code>VARCHAR</code>, <code>TEXT</code>, <code>BOOLEAN</code>, <code>FLOAT</code>, <code>DOUBLE</code>, <code>BIGINT</code>, <code>DATE</code>, and <code>TIMESTAMP</code>. The engine stores up to <strong>16</strong> parameters (<code>MAX_PROC_PARAMS</code>). It quietly ignores extra parameters at parse time.</p>
+
+<p>The body is captured as raw text. The engine scans <code>g_lex_input</code> for the first <code>BEGIN</code> keyword and the matching standalone <code>END</code>. It tracks the depth of nested <code>BEGIN…END</code> blocks. It skips <code>END&nbsp;IF</code>, <code>END&nbsp;WHILE</code>, <code>END&nbsp;LOOP</code>, <code>END&nbsp;FOREACH</code>, and <code>END&nbsp;CASE</code>. A body can be at most <strong>8192</strong> bytes. The parameter list can be at most <strong>1024</strong> bytes.</p>
+
+<pre><code><span class="c-key">CREATE</span> <span class="c-key">PROCEDURE</span> add_user(<span class="c-key">IN</span> uname <span class="c-key">VARCHAR</span>(<span class="c-str">50</span>), <span class="c-key">IN</span> uage <span class="c-key">INT</span>) <span class="c-key">AS</span>
+<span class="c-key">BEGIN</span>
+    <span class="c-key">INSERT INTO</span> users(name, age) <span class="c-key">VALUES</span> (uname, uage);
+<span class="c-key">END</span>;
+
+<span class="c-key">CREATE OR REPLACE FUNCTION</span> double_it(n <span class="c-key">INT</span>) <span class="c-key">RETURNS</span> <span class="c-key">INT</span> <span class="c-key">AS</span>
+<span class="c-key">BEGIN</span>
+    <span class="c-key">RETURN</span> n * <span class="c-str">2</span>;
+<span class="c-key">END</span>;</code></pre>
+
+<div class="callout">
+<strong>OR REPLACE semantics.</strong> When you give <code>OR REPLACE</code> and a procedure of the same name already exists, the engine drops the old definition and creates it again. Without <code>OR REPLACE</code>, a duplicate name fails with SQLSTATE <code>42P07</code> (<em>"procedure/function already exists"</em>). Lookup is by name only. So <code>CREATE FUNCTION</code> and <code>CREATE PROCEDURE</code> share one namespace per schema.
+</div>
+
+<h2 id="param-substitution">21.3. Parameter and variable substitution</h2>
+<p>EvolutionDB does not bind parameters as typed values. Instead it uses <em>textual substitution</em> before it runs each statement in the body. The engine walks the SQL. It replaces each parameter name with the matching argument text. It also replaces the positional markers <code>$1</code>, <code>$2</code>, and so on. The substitution skips text inside single-quoted string literals. So a literal that holds a parameter name is left alone.</p>
+<p>The quoting around an argument matters. A string argument keeps its quotes. For example, it arrives as <code>'alice'</code>. A numeric argument arrives as bare digits. <code>NULL</code> arrives as the keyword <code>NULL</code>. A boolean arrives as <code>TRUE</code>/<code>FALSE</code>. The engine then parses the substituted text. So you must write the body to expect substituted SQL, not bound values.</p>
+
+<div class="callout">
+<strong>Security caveat.</strong> Arguments are spliced into SQL text. So a procedure call is really string interpolation. Pass only trusted or already-escaped values. There is no separate bind layer to stop injection. This is a chosen limit of the text-driven engine. It is not the parameterized-statement model that the SQL standard describes.
+</div>
+
+<h2 id="control-flow">21.4. Control flow inside a body</h2>
+<p>The body splitter divides the body on <code>;</code>. Then it splits again at control-flow keyword boundaries. A block map records the matching <code>END</code> markers. This lets the interpreter jump. The engine recognises the following constructs.</p>
+<table>
+<thead><tr><th>Construct</th><th>Form</th></tr></thead>
+<tbody>
+<tr><td>Conditional</td><td><code>IF cond THEN … [ ELSEIF cond THEN … ] [ ELSE … ] END IF</code></td></tr>
+<tr><td>Pre-tested loop</td><td><code>WHILE cond DO … END WHILE</code></td></tr>
+<tr><td>Unconditional loop</td><td><code>[ label: ] LOOP … END LOOP</code></td></tr>
+<tr><td>Counted loop</td><td><code>FOR var IN start..end DO … END FOR</code></td></tr>
+<tr><td>Query loop</td><td><code>FOREACH vars IN (query) DO … END FOREACH</code></td></tr>
+<tr><td>Multi-branch</td><td><code>CASE expr WHEN val THEN … [ ELSE … ] END CASE</code></td></tr>
+<tr><td>Loop control</td><td><code>LEAVE [label]</code>, <code>ITERATE [label]</code></td></tr>
+<tr><td>Local variable</td><td><code>DECLARE var TYPE [DEFAULT value]</code>, then <code>SET var = expr</code></td></tr>
+<tr><td>Cursor</td><td><code>DECLARE c CURSOR FOR query</code>, <code>OPEN c</code>, <code>FETCH c INTO …</code>, <code>CLOSE c</code></td></tr>
+<tr><td>Handler</td><td><code>DECLARE { CONTINUE | EXIT } HANDLER FOR cond …</code></td></tr>
+<tr><td>Return (functions)</td><td><code>RETURN expr</code></td></tr>
+<tr><td>Raise error</td><td><code>SIGNAL …</code> (see §21.7)</td></tr>
+</tbody>
+</table>
+<p>A loop can take an optional leading <code>label:</code>. This lets <code>LEAVE</code>/<code>ITERATE</code> target a loop that wraps it. The engine tracks up to <strong>32</strong> local variables, <strong>8</strong> cursors, and <strong>8</strong> handlers per call. A body is split into at most <strong>128</strong> statement units.</p>
+
+<pre><code><span class="c-key">CREATE PROCEDURE</span> classify(score <span class="c-key">INT</span>) <span class="c-key">AS</span>
+<span class="c-key">BEGIN</span>
+    <span class="c-key">DECLARE</span> grade <span class="c-key">VARCHAR</span>(<span class="c-str">2</span>) <span class="c-key">DEFAULT</span> <span class="c-str">'F'</span>;
+    <span class="c-key">IF</span> score >= <span class="c-str">90</span> <span class="c-key">THEN</span>
+        <span class="c-key">SET</span> grade = <span class="c-str">'A'</span>;
+    <span class="c-key">ELSEIF</span> score >= <span class="c-str">70</span> <span class="c-key">THEN</span>
+        <span class="c-key">SET</span> grade = <span class="c-str">'C'</span>;
+    <span class="c-key">END IF</span>;
+    <span class="c-key">INSERT INTO</span> results(score, grade) <span class="c-key">VALUES</span> (score, grade);
+<span class="c-key">END</span>;</code></pre>
+
+<h2 id="call">21.5. CALL</h2>
+<p>You run a stored procedure with <code>CALL</code>. See <a href="/3.0/ref/call/">CALL</a>. The parser only records the call name and arguments. The body runs in the adaptor layer after parsing returns. This avoids re-entering the parser mutex.</p>
+<div class="synopsis">
+<pre><code><span class="c-key">CALL</span> name <span class="c-key">(</span> <span class="opt">[ arg [, arg ... ] ]</span> <span class="c-key">)</span></code></pre>
+</div>
+<p>An argument can be an integer literal, an approximate-number literal, a string literal, <code>NULL</code>, a boolean, a bare name, or a session variable (<code>@var</code>). The argument count must match the parameter count exactly. If it does not, the call fails with SQLSTATE <code>42883</code> (<em>"procedure … expects N arguments, got M"</em>). The engine accepts at most <strong>16</strong> arguments (<code>MAX_CALL_ARGS</code>). A procedure name that does not exist also raises <code>42883</code>.</p>
+
+<pre><code><span class="c-key">CALL</span> add_user(<span class="c-str">'alice'</span>, <span class="c-str">30</span>);</code></pre>
+
+<p><strong>OUT / INOUT parameters.</strong> A call argument for an <code>INOUT</code> parameter can be a session variable (<code>@var</code>). In that case the engine reads the current value of the variable into the body before it runs. It can also write a result back to the caller's variable. This is how a procedure returns scalar data to the calling session.</p>
+
+<h2 id="create-trigger">21.6. CREATE TRIGGER / DROP TRIGGER / ALTER TRIGGER</h2>
+<p>The full grammar is on <a href="/3.0/ref/create-trigger/">CREATE TRIGGER</a>. A trigger ties a body to one table, one timing, and one event. It always fires <code>FOR EACH ROW</code>.</p>
+<div class="synopsis">
+<pre><code><span class="c-key">CREATE TRIGGER</span> name { <span class="c-key">BEFORE</span> | <span class="c-key">AFTER</span> } { <span class="c-key">INSERT</span> | <span class="c-key">UPDATE</span> | <span class="c-key">DELETE</span> }
+    <span class="c-key">ON</span> table_name <span class="c-key">FOR EACH ROW</span>
+<span class="c-key">BEGIN</span>
+    body
+<span class="c-key">END</span>
+
+<span class="c-key">DROP TRIGGER</span> <span class="opt">[ IF EXISTS ]</span> name
+
+<span class="c-key">ALTER TRIGGER</span> name { <span class="c-key">ENABLE</span> | <span class="c-key">DISABLE</span> }</code></pre>
+</div>
+<p>The <code>FOR EACH ROW</code> clause is required. There is no statement-level (<code>FOR EACH STATEMENT</code>) trigger. There is no <code>WHEN</code> condition or column list on the event. The target table must exist. If it does not, creation fails with SQLSTATE <code>42P01</code>. A duplicate trigger name raises <code>42P07</code>. A new trigger is enabled by default. <code>ALTER TRIGGER … DISABLE</code> flips the catalog <code>enabled</code> flag. The trigger is then skipped at firing time, but it is not dropped.</p>
+
+<div class="callout">
+<strong>DROP TRIGGER is name-only.</strong> Unlike PostgreSQL, you do not name the table in <code>DROP TRIGGER</code> / <code>ALTER TRIGGER</code>. EvolutionDB scans every table in the current schema to find a trigger by name. So trigger names are scoped to the schema. The first match wins.
+</div>
+
+<p><strong>OLD / NEW row references.</strong> Inside a trigger body, <code>OLD.col</code> and <code>NEW.col</code> refer to the row before and after the change. Before the body runs, the engine replaces these references with text. It uses the matching column value for the affected row. A numeric value is inserted bare. Everything else is single-quoted, and any embedded quotes are doubled. A missing value becomes <code>NULL</code>. Which values you get depends on the event. <code>INSERT</code> fills <code>NEW</code>. <code>DELETE</code> fills <code>OLD</code>. <code>UPDATE</code> fills both.</p>
+
+<p><strong>BEFORE-trigger field assignment.</strong> A <code>BEFORE</code> trigger can change the row that is being written. It does this by assigning to a column with <code>SET NEW.col = expr</code>. The engine pulls these assignments out of the body. It first does the <code>OLD</code>/<code>NEW</code> substitution. Then it evaluates each expression with a <code>SELECT</code>. It writes the result back into the row before the row is stored. The engine honours up to <strong>16</strong> such assignments per trigger.</p>
+
+<pre><code><span class="c-key">CREATE TRIGGER</span> stamp_created <span class="c-key">BEFORE INSERT</span> <span class="c-key">ON</span> orders <span class="c-key">FOR EACH ROW</span>
+<span class="c-key">BEGIN</span>
+    <span class="c-key">SET</span> <span class="c-key">NEW</span>.created_at = <span class="c-key">NOW</span>();
+<span class="c-key">END</span>;
+
+<span class="c-key">CREATE TRIGGER</span> audit_del <span class="c-key">AFTER DELETE</span> <span class="c-key">ON</span> accounts <span class="c-key">FOR EACH ROW</span>
+<span class="c-key">BEGIN</span>
+    <span class="c-key">INSERT INTO</span> deleted_accounts(id, name) <span class="c-key">VALUES</span> (<span class="c-key">OLD</span>.id, <span class="c-key">OLD</span>.name);
+<span class="c-key">END</span>;</code></pre>
+
+<p><strong>Memory-store triggers.</strong> You can attach a trigger to a memory store with <code>ON MEMORY STORE name</code>. The parser stages the store name with an internal <code>@mem:</code> sentinel. At creation, the engine resolves the store through the catalog. It rewrites the store to its backing table <code>mem_&lt;name&gt;</code>. After that, the trigger fires just like a normal table trigger. A <code>PUT</code> event on a memory store is mapped to the <code>INSERT</code> (<code>'I'</code>) event inside the engine. A store that does not exist raises SQLSTATE <code>42704</code>.</p>
+
+<h2 id="firing">21.7. Trigger firing model, errors, and recursion</h2>
+<p>The engine fires matching triggers from the <code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code> hook points. It fires them once per affected row. It filters them by timing, event, and the <code>enabled</code> flag. For each fired trigger, the engine wraps the substituted body as a temporary procedure. It calls the procedure, then drops it. So triggers and procedures run through the same engine. The steps are shown below.</p>
+<pre><code><span class="c-com">-- conceptual expansion performed internally per fired trigger</span>
+<span class="c-key">CREATE OR REPLACE PROCEDURE</span> __trig_&lt;id&gt;__() <span class="c-key">AS</span> <span class="c-key">BEGIN</span> &lt;substituted body&gt; <span class="c-key">END</span>;
+<span class="c-key">CALL</span> __trig_&lt;id&gt;__();
+<span class="c-key">DROP PROCEDURE IF EXISTS</span> __trig_&lt;id&gt;__;</code></pre>
+<p><strong>Recursion limit.</strong> A depth counter guards trigger execution. Nesting beyond <strong>16</strong> levels (<code>MAX_TRIGGER_DEPTH</code>) quietly stops further trigger firing. No error is raised. This prevents runaway recursion.</p>
+
+<p><strong>Raising errors with SIGNAL.</strong> A body can stop with a user-defined error. This works for both procedures and triggers.</p>
+<div class="synopsis">
+<pre><code><span class="c-key">SIGNAL</span> <span class="opt">[ SQLSTATE 'xxxxx' ]</span> <span class="opt">[ SET MESSAGE_TEXT = 'message' ]</span></code></pre>
+</div>
+<p>If you leave out <code>SQLSTATE</code>, it defaults to <code>45000</code> (unhandled user-defined exception). The default message is <em>"Unhandled user-defined exception"</em>. A <code>DECLARE … HANDLER FOR SQLEXCEPTION</code> can catch the signal. A <code>CONTINUE</code> handler resumes after the failed statement. An <code>EXIT</code> handler unwinds the body. If there is no handler, the error passes to the caller. When a trigger body errors, the whole firing fails. The DML statement that started it is aborted.</p>
+
+<pre><code><span class="c-key">CREATE TRIGGER</span> no_negatives <span class="c-key">BEFORE INSERT</span> <span class="c-key">ON</span> ledger <span class="c-key">FOR EACH ROW</span>
+<span class="c-key">BEGIN</span>
+    <span class="c-key">IF</span> <span class="c-key">NEW</span>.amount &lt; <span class="c-str">0</span> <span class="c-key">THEN</span>
+        <span class="c-key">SIGNAL SQLSTATE</span> <span class="c-str">'45000'</span> <span class="c-key">SET MESSAGE_TEXT</span> = <span class="c-str">'amount must be non-negative'</span>;
+    <span class="c-key">END IF</span>;
+<span class="c-key">END</span>;</code></pre>
+
+<h2 id="errors">21.8. SQLSTATE reference</h2>
+<p>These are the error codes that the trigger and procedure paths raise.</p>
+<dl class="params">
+<dt><code>42P01</code></dt><dd>Trigger target table does not exist.</dd>
+<dt><code>42P07</code></dt><dd>Duplicate object. A procedure or function already exists (without <code>OR REPLACE</code>), or a trigger name already exists.</dd>
+<dt><code>42883</code></dt><dd>Procedure or function does not exist on <code>CALL</code> or <code>DROP</code>. The trigger does not exist on <code>DROP</code> without <code>IF EXISTS</code>. The argument count does not match on <code>CALL</code>.</dd>
+<dt><code>42704</code></dt><dd>Memory store named in <code>ON MEMORY STORE</code> does not exist.</dd>
+<dt><code>45000</code></dt><dd>Default SQLSTATE for an unqualified <code>SIGNAL</code> (user-defined exception).</dd>
+<dt><code>53200</code></dt><dd>Out of memory while preparing a <code>CALL</code> body for execution.</dd>
+</dl>
+
+<h2 id="limitations">21.9. Notes &amp; limitations</h2>
+<div class="callout">
+<strong>What EvolutionDB does <em>not</em> implement.</strong> Here is how it differs from PostgreSQL and the SQL standard.
+<ul>
+<li><strong>No row-vs-statement choice.</strong> Triggers are always <code>FOR EACH ROW</code>. There is no statement-level trigger.</li>
+<li><strong>No <code>WHEN</code> condition, column list, or <code>INSTEAD OF</code>.</strong> The event is a single bare <code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code> with no filter. Views cannot carry triggers.</li>
+<li><strong>One event per trigger.</strong> There is no <code>INSERT OR UPDATE</code> multi-event form. Create separate triggers.</li>
+<li><strong>Table is not named on <code>DROP</code>/<code>ALTER TRIGGER</code>.</strong> Names are resolved by scanning the schema. So trigger names should be unique per schema.</li>
+<li><strong>Textual parameter substitution, not value binding.</strong> Arguments and <code>OLD</code>/<code>NEW</code> references are spliced into SQL text. There is no typed parameter binding and no protection against injection.</li>
+<li><strong>No procedure/function overloading.</strong> Lookup is by name within a schema. Functions and procedures share that namespace.</li>
+<li><strong>Functions are not callable inline.</strong> A <code>CREATE FUNCTION</code> body runs through the same engine as a procedure. The return type is recorded. But the database does not let you call user functions inside a <code>SELECT</code> the way PostgreSQL does.</li>
+<li><strong>Fixed capacities.</strong> Body &le; 8192 bytes. &le; 16 parameters/arguments. &le; 128 statement units. &le; 32 local variables, &le; 8 cursors, &le; 8 handlers per call. Trigger recursion depth &le; 16.</li>
+<li><strong>No trigger ordering guarantees by name.</strong> There are also no transition tables (<code>REFERENCING … OLD/NEW TABLE</code>).</li>
+</ul>
+</div>
+
+<h2 id="see-also">21.10. See also</h2>
+<ul>
+<li><a href="/3.0/ref/create-procedure/">CREATE PROCEDURE</a>. The full reference for <code>CREATE</code>/<code>DROP PROCEDURE</code> and <code>FUNCTION</code>.</li>
+<li><a href="/3.0/ref/create-trigger/">CREATE TRIGGER</a>. The full reference for <code>CREATE</code>/<code>DROP</code>/<code>ALTER TRIGGER</code>.</li>
+<li><a href="/3.0/ref/call/">CALL</a>. How to run a stored procedure.</li>
+<li><a href="/3.0/ref/insert/">INSERT</a>, <a href="/3.0/ref/update/">UPDATE</a>, <a href="/3.0/ref/delete/">DELETE</a>. The DML statements whose hook points fire triggers.</li>
+<li><a href="/3.0/ref/create-memory-store/">CREATE MEMORY STORE</a>. The target of <code>ON MEMORY STORE</code> triggers.</li>
+</ul>
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

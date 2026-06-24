@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Compare versions | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+<style>
+  .cmp-wrap { max-width: 1100px; margin: 0 auto; padding: 40px clamp(20px,5vw,48px) 120px; }
+  .cmp-bar { display:flex; flex-wrap:wrap; align-items:center; gap:14px; margin:18px 0 8px; }
+  .cmp-bar select { background:#0a0e17; color:#8aebff; border:1px solid rgba(34,211,238,.3);
+    border-radius:8px; padding:7px 10px; font-size:13px; font-family:'JetBrains Mono',monospace; }
+  .cmp-bar .arrow { color:#859397; }
+  .cmp-toggle { margin-left:auto; display:flex; gap:6px; }
+  .cmp-toggle button { background:#0a0e17; color:#bbc9cd; border:1px solid rgba(255,255,255,.12);
+    border-radius:8px; padding:6px 12px; font-size:12px; cursor:pointer; font-family:'JetBrains Mono',monospace; }
+  .cmp-toggle button.on { color:#22D3EE; border-color:rgba(34,211,238,.5); background:rgba(34,211,238,.08); }
+  .cmp-page { margin:34px 0 0; border-top:1px solid rgba(255,255,255,.08); padding-top:20px; }
+  .cmp-page > h2 { font-family:'Hanken Grotesk'; font-size:22px; color:#fff; margin:0 0 4px; }
+  .cmp-page .pagetag { font-family:'JetBrains Mono',monospace; font-size:11px; color:#859397; }
+  .cmp-sec { margin:16px 0; }
+  .cmp-sec h3 { font-family:'Hanken Grotesk'; font-size:16px; color:#dfe2ef; margin:0 0 8px; }
+  .diff { font-family:'JetBrains Mono',monospace; font-size:12.5px; line-height:1.6;
+    border:1px solid rgba(255,255,255,.1); border-radius:10px; overflow:hidden; }
+  .diff .row { display:flex; }
+  .diff .gut { flex:none; width:22px; text-align:center; color:#5b6b78; user-select:none;
+    border-right:1px solid rgba(255,255,255,.06); background:rgba(255,255,255,.02); }
+  .diff .txt { padding:2px 12px; white-space:pre-wrap; color:#cdd6e4; flex:1; }
+  .diff .add { background:rgba(46,204,113,.12); }
+  .diff .add .gut { color:#54e08a; }   .diff .add .txt { color:#c9f5d8; }
+  .diff .del { background:rgba(231,76,60,.12); }
+  .diff .del .gut { color:#ff8a7a; }   .diff .del .txt { color:#ffd0c8; }
+  .diff.split .row { }
+  .diff.split .col { flex:1; display:flex; min-width:0; border-right:1px solid rgba(255,255,255,.06); }
+  .diff.split .col:last-child { border-right:0; }
+  .cmp-added-page { color:#54e08a; } .cmp-removed-page { color:#ff8a7a; }
+  .cmp-empty { color:#bbc9cd; margin-top:24px; }
+  .cmp-hl { background:rgba(34,211,238,.06); border:1px solid rgba(34,211,238,.25);
+    border-radius:14px; padding:16px 18px; margin:18px 0; color:#bfe9f2; }
+  .cmp-hl h3 { margin:0 0 8px; color:#fff; font-family:'Hanken Grotesk'; font-size:16px; }
+  .cmp-stat { font-size:12px; color:#859397; font-family:'JetBrains Mono',monospace; }
+</style>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="pt-16">
+<main class="cmp-wrap prose reveal">
+  <h1>Compare versions</h1>
+  <p class="lede">Pick two versions to see what changed. The view works like a code diff. Removed text is red. Added text is green.</p>
+  <div class="cmp-bar" id="cmpBar" style="display:none">
+    <label class="cmp-stat">From</label>
+    <select id="fromSel"></select>
+    <span class="arrow material-symbols-outlined">arrow_forward</span>
+    <label class="cmp-stat">To</label>
+    <select id="toSel"></select>
+    <div class="cmp-toggle">
+      <button id="mUnified" class="on">Unified</button>
+      <button id="mSplit">Split</button>
+    </div>
+  </div>
+  <div id="cmpHl"></div>
+  <div id="cmpOut"></div>
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+<script>
+(function () {
+  var out = document.getElementById("cmpOut");
+  var bar = document.getElementById("cmpBar");
+  var hlBox = document.getElementById("cmpHl");
+  var fromSel = document.getElementById("fromSel");
+  var toSel = document.getElementById("toSel");
+  var mode = "unified";
+  var cache = {};
+
+  function get(url) { return fetch(url).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }); }
+
+  // ---- sentence-level diff (LCS) ----
+  function sentences(t) {
+    if (!t) return [];
+    return t.replace(/\s+/g, " ").trim().split(/(?<=[.!?])\s+/).filter(Boolean);
+  }
+  function diff(a, b) {
+    var n = a.length, m = b.length, i, j;
+    var dp = []; for (i = 0; i <= n; i++) { dp.push(new Array(m + 1).fill(0)); }
+    for (i = n - 1; i >= 0; i--) for (j = m - 1; j >= 0; j--)
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    var ops = []; i = 0; j = 0;
+    while (i < n && j < m) {
+      if (a[i] === b[j]) { ops.push({ t: "eq", s: a[i] }); i++; j++; }
+      else if (dp[i + 1][j] >= dp[i][j + 1]) { ops.push({ t: "del", s: a[i] }); i++; }
+      else { ops.push({ t: "add", s: b[j] }); j++; }
+    }
+    while (i < n) { ops.push({ t: "del", s: a[i++] }); }
+    while (j < m) { ops.push({ t: "add", s: b[j++] }); }
+    return ops;
+  }
+  function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+  function renderUnified(ops) {
+    return ops.map(function (o) {
+      var cls = o.t === "add" ? "add" : o.t === "del" ? "del" : "";
+      var g = o.t === "add" ? "+" : o.t === "del" ? "-" : "";
+      return '<div class="row ' + cls + '"><div class="gut">' + g + '</div><div class="txt">' + esc(o.s) + "</div></div>";
+    }).join("");
+  }
+  function renderSplit(ops) {
+    return ops.map(function (o) {
+      var L = (o.t === "del" || o.t === "eq") ? '<div class="col"><div class="gut">' + (o.t === "del" ? "-" : "") + '</div><div class="txt">' + esc(o.s) + "</div></div>" : '<div class="col"><div class="gut"></div><div class="txt"></div></div>';
+      var R = (o.t === "add" || o.t === "eq") ? '<div class="col"><div class="gut">' + (o.t === "add" ? "+" : "") + '</div><div class="txt">' + esc(o.s) + "</div></div>" : '<div class="col"><div class="gut"></div><div class="txt"></div></div>';
+      var cls = o.t === "add" ? "add" : o.t === "del" ? "del" : "";
+      return '<div class="row ' + cls + '">' + L + R + "</div>";
+    }).join("");
+  }
+
+  function secMap(page) {
+    var m = {}; (page && page.sections || []).forEach(function (s, i) { m[(s.id || "") + "#" + i] = s; });
+    return page && page.sections || [];
+  }
+
+  function render() {
+    var fv = fromSel.value, tv = toSel.value;
+    Promise.all([cache[fv] ? Promise.resolve(cache[fv]) : get("/compare/data/" + fv + ".json"),
+                 cache[tv] ? Promise.resolve(cache[tv]) : get("/compare/data/" + tv + ".json"),
+                 get("/compare/data/highlights/" + fv + "__" + tv + ".json")])
+    .then(function (res) {
+      var A = res[0], B = res[1], HL = res[2];
+      cache[fv] = A; cache[tv] = B;
+      hlBox.innerHTML = HL && HL.summary
+        ? '<div class="cmp-hl"><h3>What changed from ' + fv + " to " + tv + '</h3><div>' + esc(HL.summary).replace(/\n/g, "<br>") + "</div></div>" : "";
+      if (!A || !B) { out.innerHTML = '<p class="cmp-empty">Could not load the version data.</p>'; return; }
+      var slugs = {}; Object.keys(A.pages || {}).forEach(function (s) { slugs[s] = 1; }); Object.keys(B.pages || {}).forEach(function (s) { slugs[s] = 1; });
+      var html = "", changedPages = 0;
+      Object.keys(slugs).sort().forEach(function (slug) {
+        var pa = (A.pages || {})[slug], pb = (B.pages || {})[slug];
+        var title = (pb && pb.title) || (pa && pa.title) || slug;
+        var blocks = "", changed = false;
+        if (!pa) { blocks = '<p class="cmp-added-page">This page was added in ' + tv + ".</p>"; changed = true; }
+        else if (!pb) { blocks = '<p class="cmp-removed-page">This page was removed in ' + tv + ".</p>"; changed = true; }
+        else {
+          var sa = secMap(pa), sb = secMap(pb), max = Math.max(sa.length, sb.length), k;
+          for (k = 0; k < max; k++) {
+            var x = sa[k], y = sb[k];
+            var ta = x ? (x.heading + ". " + x.text) : "", tb = y ? (y.heading + ". " + y.text) : "";
+            if (ta === tb) continue;
+            changed = true;
+            var ops = diff(sentences(ta), sentences(tb));
+            blocks += '<div class="cmp-sec"><h3>' + esc((y && y.heading) || (x && x.heading) || "Section") + '</h3>' +
+                      '<div class="diff ' + (mode === "split" ? "split" : "") + '">' +
+                      (mode === "split" ? renderSplit(ops) : renderUnified(ops)) + "</div></div>";
+          }
+        }
+        if (changed) { changedPages++; html += '<div class="cmp-page"><div class="pagetag">' + slug + '</div><h2>' + esc(title) + "</h2>" + blocks + "</div>"; }
+      });
+      out.innerHTML = changedPages ? ('<p class="cmp-stat">' + changedPages + " page(s) changed between " + fv + " and " + tv + ".</p>" + html)
+                                   : '<p class="cmp-empty">No text changes between ' + fv + " and " + tv + ".</p>";
+    });
+  }
+
+  get("/compare/data/index.json").then(function (idx) {
+    var vers = idx && idx.versions || [];
+    if (vers.length < 2) {
+      out.innerHTML = '<p class="cmp-empty">Only one version is published right now. A comparison view will appear here when the next version ships.</p>';
+      return;
+    }
+    bar.style.display = "flex";
+    var opts = vers.map(function (v) { return '<option value="' + v + '">' + v + "</option>"; }).join("");
+    fromSel.innerHTML = opts; toSel.innerHTML = opts;
+    fromSel.value = vers[vers.length - 2];
+    toSel.value = vers[vers.length - 1];
+    fromSel.addEventListener("change", render);
+    toSel.addEventListener("change", render);
+    document.getElementById("mUnified").addEventListener("click", function () { mode = "unified"; this.classList.add("on"); document.getElementById("mSplit").classList.remove("on"); render(); });
+    document.getElementById("mSplit").addEventListener("click", function () { mode = "split"; this.classList.add("on"); document.getElementById("mUnified").classList.remove("on"); render(); });
+    render();
+  });
+})();
+</script>
+</body></html>

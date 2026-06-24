@@ -1,0 +1,79 @@
+# Auto-generate the documentation when the version changes.
+#
+# This runs when src/include/version.h changes on main. It reads the new
+# version from version.h, scans the engine source that changed since the old
+# release, and asks the model to update docs.evolutiondb.org and
+# wiki.evolutiondb.org. It then opens a pull request with the generated pages.
+# Merging that pull request triggers docs-deploy.yml, which publishes the sites.
+#
+# Required repository secret:
+#   ANTHROPIC_API_KEY   the key the generator uses to write the prose
+name: docs version bump
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/include/version.h'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect version change
+        id: ver
+        run: |
+          NEW="$(scripts/get-version.sh)"
+          OLD="$(git diff '${{ github.event.before }}' '${{ github.sha }}' -- src/include/version.h \
+                 | sed -n 's/^-#define[[:space:]]*EVODB_VERSION[[:space:]]*"\(.*\)".*/\1/p')"
+          echo "new=$NEW" >> "$GITHUB_OUTPUT"
+          echo "old=$OLD" >> "$GITHUB_OUTPUT"
+          if [ -z "$NEW" ] || [ "$OLD" = "$NEW" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No version change detected. Old=$OLD New=$NEW."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+          BASE='${{ github.event.before }}'
+          for t in "server-v$OLD" "v$OLD"; do
+            if git rev-parse -q --verify "refs/tags/$t" >/dev/null 2>&1; then BASE="$t"; break; fi
+          done
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+
+      - name: Generate docs and wiki
+        if: steps.ver.outputs.changed == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python3 docs/tools/gen_docs.py --site docs \
+            --base-ref "${{ steps.ver.outputs.base }}" --head-ref "${{ github.sha }}" \
+            --old-version "${{ steps.ver.outputs.old }}"
+          python3 docs/tools/gen_docs.py --site wiki \
+            --base-ref "${{ steps.ver.outputs.base }}" --head-ref "${{ github.sha }}" \
+            --old-version "${{ steps.ver.outputs.old }}"
+
+      - name: Open pull request
+        if: steps.ver.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: docs/auto-${{ steps.ver.outputs.new }}
+          title: "docs: generate pages for ${{ steps.ver.outputs.new }}"
+          body: |
+            Automated documentation update for ${{ steps.ver.outputs.old }} to ${{ steps.ver.outputs.new }}.
+
+            The generator read src/include/version.h, scanned the engine source that
+            changed since the last release, and updated docs.evolutiondb.org and
+            wiki.evolutiondb.org in the house style. It also refreshed the version
+            comparison data. Review the pages, then merge to publish them.
+          commit-message: "docs: generate pages for ${{ steps.ver.outputs.new }}"
+          add-paths: |
+            docs/site/**

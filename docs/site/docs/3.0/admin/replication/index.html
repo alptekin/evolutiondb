@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>29. Replication &amp; Sharding | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>29. Replication &amp; Sharding</h1>
+<p class="lede">How EvolutionDB copies a database across nodes. It uses physical WAL streaming. It picks a leader with a Raft consensus core. It can also spread one table over several machines with hash or range sharding and automatic query routing.</p>
+
+<p>EvolutionDB has three clustering parts that work together. They all live in the adaptor layer. They are all <em>opt-in at runtime</em>. The first part is physical replication in <code>adaptor/replication.c</code>. The second is Raft leader election in <code>adaptor/raft.c</code>. The third is a distributed query engine with sharding in <code>adaptor/distributed.c</code> and <code>adaptor/shard.c</code>. A server started without the right flags runs as a normal single node. None of these paths run in that case. They also need POSIX sockets and pthreads. On Windows with MinGW these files compile to stubs. Only the default embedded single-node flow works there.</p>
+
+<div class="callout">
+<p><strong>Scope of this chapter.</strong> This page describes only what the engine does today. Where EvolutionDB differs from PostgreSQL or the SQL standard, we say so clearly. Several of these parts are kept simple on purpose. Raft is heartbeat-only. The WAL ships page images. SQL key extraction uses no regex. The limits are listed in the <a href="#notes">Notes</a> callout.</p>
+</div>
+
+<h2 id="overview">29.1. Overview &amp; topology</h2>
+
+<p>A node takes one of three replication roles. The role is set at startup. You can see it with <a href="/3.0/ref/show/">SHOW REPLICATION STATUS</a>.</p>
+
+<dl class="params">
+<dt><code>primary</code> (<code>REPL_ROLE_PRIMARY</code> = 0)</dt>
+<dd>Accepts DML. It runs the WAL <em>sender</em>. It streams WAL records to the replicas that connect. This is the default role.</dd>
+<dt><code>replica</code> (<code>REPL_ROLE_REPLICA</code> = 1)</dt>
+<dd>Connects to a primary. It replays the streamed WAL into its own data file. It serves read traffic. <code>repl_is_replica()</code> blocks the write path.</dd>
+<dt><code>witness</code> (<code>REPL_ROLE_WITNESS</code> = 2)</dt>
+<dd>Participates in Raft voting but stores no data and rejects SELECTs. It breaks ties in an even-sized cluster without needing a full data copy.</dd>
+</dl>
+
+<p>The role is chosen by the <code>--role</code> flag or the <code>EVOSQL_REPLICATION_ROLE</code> environment variable. A late-arriving replica start always wins over a stored pin. <code>repl_get_role()</code> returns <code>replica</code> as soon as the receiver is running. A Raft election can flip the role at runtime (see <a href="#raft">29.3</a>).</p>
+
+<p>PostgreSQL uses separate <code>primary_conninfo</code>, <code>standby.signal</code>, and a <code>recovery.conf</code> file. EvolutionDB configures everything through a small set of CLI flags and environment variables. They are all read at boot in <code>adaptor/main.c</code>.</p>
+
+<table>
+<thead><tr><th>Flag</th><th>Environment</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>--role primary|replica|witness</code></td><td><code>EVOSQL_REPLICATION_ROLE</code></td><td>Pin the replication role.</td></tr>
+<tr><td><code>--replication-port PORT</code></td><td><code>EVOSQL_REPLICATION_PORT</code></td><td>Primary WAL sender listen port (default <code>9968</code>).</td></tr>
+<tr><td><code>--replica HOST:PORT</code></td><td><code>EVOSQL_PRIMARY_HOST</code> / <code>EVOSQL_PRIMARY_PORT</code></td><td>Replica connects here to receive WAL.</td></tr>
+<tr><td><code>--cluster h1:p,h2:p,…</code></td><td>, </td><td>Raft cluster membership (comma-separated <code>host:port</code>).</td></tr>
+<tr><td><code>--node-id N</code></td><td>, </td><td>0-based index of this node in the <code>--cluster</code> list.</td></tr>
+<tr><td><code>--cdc-port PORT</code></td><td><code>EVOSQL_CDC_PORT</code></td><td>Change-Data-Capture JSON Lines stream port.</td></tr>
+<tr><td><code>--dist-port PORT</code></td><td>, </td><td>Internal distributed-query port (default <code>9969</code>).</td></tr>
+<tr><td><code>--base-backup PATH</code></td><td>, </td><td>Run a base backup and exit (no listeners).</td></tr>
+<tr><td>, </td><td><code>EVOSQL_SYNC_COMMIT</code></td><td>Truthy enables synchronous commit (default async).</td></tr>
+<tr><td>, </td><td><code>EVOSQL_REPLICATION_USER</code> / <code>_PASSWORD</code></td><td>Replication auth credentials.</td></tr>
+<tr><td>, </td><td><code>EVOSQL_REPLICATION_TLS</code></td><td>Truthy wraps replication in TLS (reuses server cert/key).</td></tr>
+</tbody>
+</table>
+
+<h2 id="physical-replication">29.2. Physical (WAL streaming) replication</h2>
+
+<p>Physical replication ships raw WAL page images from a primary to one or more replicas. The unit of replication is a WAL record. Its layout is <code>[lsn:4][page_no:4][page_len:2][timestamp:8]…[page bytes][CRC]</code>. EvolutionDB's WAL stores full <em>page images</em> (4&nbsp;KB pages). A replica reapplies a record by writing the page image to the same byte offset (<code>page_no &times; 4096</code>) in its local data file. It also invalidates any cached copy in its buffer pool. There is no logical redo or operator replay. This approach is closer to PostgreSQL's full-page-write streaming than to its record-level redo.</p>
+
+<h3 id="streaming-protocol">29.2.1. The streaming protocol</h3>
+
+<p>Replication uses a private line protocol over TCP. It is separate from the PostgreSQL wire protocol. The replica drives the handshake.</p>
+
+<pre><code><span class="c-com"># Replica → Primary, on connect:</span>
+REPLICATE <span class="c-str">&lt;last_lsn&gt;</span>\n
+<span class="c-com"># optional, only when the primary has auth configured:</span>
+AUTH <span class="c-str">&lt;user&gt; &lt;password&gt;</span>\n
+<span class="c-com"># Primary → Replica reply to AUTH:</span>
+OK   <span class="c-com">| ERR &lt;reason&gt;</span>
+</code></pre>
+
+<p>After the handshake the primary streams framed messages. Each message begins with a single type byte.</p>
+
+<dl class="params">
+<dt><code>'W'</code>, <code>REPL_MSG_WAL_DATA</code></dt>
+<dd>Followed by a 4-byte length and the full WAL record. The replica parses the embedded record header, writes the page, and advances its slot LSN. Every 100 records it also persists the slot file and sends an ACK.</dd>
+<dt><code>'H'</code>, <code>REPL_MSG_HEARTBEAT</code></dt>
+<dd>Keepalive, sent on a 5-second interval when no WAL is flowing. The replica answers with an ACK carrying its current confirmed LSN. This keeps <a href="#sync-commit">synchronous-commit</a> waiters and status views fresh.</dd>
+<dt><code>'A'</code>, <code>REPL_MSG_ACK</code></dt>
+<dd>Replica to primary. A 5-byte frame (<code>'A'</code> + <code>uint32</code> confirmed LSN). The primary's sender drains ACKs between batches and on every heartbeat tick. It performs byte-level resync if it sees an unexpected byte.</dd>
+</dl>
+
+<p>The sender first streams everything in <code>evosql.wal</code> after the requested <code>start_lsn</code> (catch-up). Then it blocks on a condition variable waiting for <code>repl_notify_new_wal()</code> to fire as new records are flushed.</p>
+
+<h3 id="replica-setup">29.2.2. Setting up a replica</h3>
+
+<p>Bring up a primary with the WAL sender listening, then bootstrap a replica from a base backup and point it at the primary.</p>
+
+<pre><code><span class="c-com"># 1. Primary - start with the WAL sender on port 9968</span>
+./evosql-server --role primary --replication-port 9968
+
+<span class="c-com"># 2. Take a base backup into a fresh data directory (runs and exits)</span>
+./evosql-server --base-backup /var/lib/evosql/standby1
+
+<span class="c-com"># 3. Replica - replay the backup, then stream from the primary</span>
+EVOSQL_PRIMARY_HOST=primary.internal \
+EVOSQL_PRIMARY_PORT=9968 \
+./evosql-server --role replica --replica primary.internal:9968
+</code></pre>
+
+<p>The replica auto-reconnects with exponential backoff (1&nbsp;s, doubling up to a 30&nbsp;s cap). It resumes from the LSN persisted in its slot file <code>root/evosql.slot</code>. A dropped link or a restarted primary recovers without operator action.</p>
+
+<h3 id="base-backup">29.2.3. Base backups</h3>
+
+<p><code>--base-backup PATH</code> flushes the buffer pool, fsyncs the WAL to pin a consistent LSN, and writes a directory bundle.</p>
+
+<dl class="params">
+<dt><code>evosql.db</code></dt><dd>Full data file, consistent at WAL-fsync time.</dd>
+<dt><code>evosql.wal</code></dt><dd>Current WAL, copied best-effort for replay past the pinned LSN.</dd>
+<dt><code>BACKUP_LABEL</code></dt><dd>Metadata: <code>start_lsn</code>, <code>timestamp</code>, <code>format=v1</code>.</dd>
+</dl>
+
+<p>If <code>PATH</code> names a regular file rather than a directory, the engine falls back to a legacy single-file copy of <code>evosql.db</code> for backward compatibility. This is far simpler than PostgreSQL's <code>pg_basebackup</code>. There is no tablespace mapping, no streamed WAL during the copy, and no manifest checksums.</p>
+
+<h3 id="security">29.2.4. Authentication &amp; TLS</h3>
+
+<p>Replication auth is opt-in. When <code>EVOSQL_REPLICATION_USER</code>/<code>_PASSWORD</code> are set, the primary <em>requires</em> the <code>AUTH</code> line. It validates the password against the catalog using <code>crypto_verify_password</code> with PBKDF2-SHA256. This is the same path as client login. A missing or malformed <code>AUTH</code>, or bad credentials, is rejected before any WAL is streamed. Setting <code>EVOSQL_REPLICATION_TLS</code> to a truthy value upgrades the transport with the server's TLS context. It reuses the same cert/key as PG-wire TLS. The replica must enable TLS to match.</p>
+
+<h3 id="sync-commit">29.2.5. Synchronous commit</h3>
+
+<p>By default replication is asynchronous. A commit returns as soon as the primary has flushed its own WAL. Setting <code>EVOSQL_SYNC_COMMIT</code> to a truthy value makes the commit path call <code>repl_sync_commit(lsn, timeout_ms)</code>. That call blocks until a <strong>majority</strong> of active replica slots have ACK'd <code>confirmed_lsn &ge; lsn</code>.</p>
+
+<ul>
+<li>Majority is <code>ceil(active / 2)</code>. 1 replica needs 1 ACK. 2 need 1. 3 need 2.</li>
+<li>With no active replicas the call returns success immediately. Sync degrades gracefully to async rather than stalling the only writer.</li>
+<li>The default wait is <code>REPL_SYNC_COMMIT_DEFAULT_MS = 2000</code> ms. On timeout the caller falls back to async commit (returns <code>-1</code>).</li>
+</ul>
+
+<p>Compare this with PostgreSQL. There is no per-transaction <code>synchronous_commit</code> GUC, no named <code>synchronous_standby_names</code> quorum sets, and no <code>remote_apply</code> level. EvolutionDB offers a single server-wide majority-ACK switch.</p>
+
+<h3 id="status">29.2.6. Monitoring</h3>
+
+<p>Status is surfaced through <a href="/3.0/ref/show/">SHOW</a> and through emulated PostgreSQL catalog views. Existing tooling like DBeaver and psql can read it.</p>
+
+<pre><code><span class="c-key">SHOW</span> REPLICATION STATUS;
+<span class="c-com">-- role | replica_id | my_lsn | confirmed_lsn | lag_bytes | active | last_seen_us</span>
+
+<span class="c-key">SHOW</span> REPLICATION LAG;
+<span class="c-com">-- replica_id | lag_bytes  (one row per active slot)</span>
+
+<span class="c-key">SELECT</span> * <span class="c-key">FROM</span> pg_stat_replication;
+<span class="c-com">-- one row per active replica slot (Task 97 v1 emulation)</span>
+</code></pre>
+
+<p>The engine tracks up to <code>REPL_MAX_SLOTS</code> = 16 replica slots. Each slot keeps a <code>replica_id</code> (the peer's <code>ip:port</code>), its highest <code>confirmed_lsn</code>, an <code>active</code> flag, and a <code>last_seen</code> microsecond timestamp. On disconnect a slot is marked inactive but keeps its LSN. This way catch-up resumes cleanly on reconnect. <code>lag_bytes</code> is reported as <code>my_lsn &minus; confirmed_lsn</code>.</p>
+
+<h2 id="cdc">29.2.7. Logical change capture (CDC)</h2>
+
+<p>Beyond physical streaming, EvolutionDB can emit row-level change events by decoding WAL page images. It compares each tuple's MVCC header inside the slotted page.</p>
+
+<table>
+<thead><tr><th>Condition on tuple</th><th>Event <code>op</code></th></tr></thead>
+<tbody>
+<tr><td><code>xmin &gt; 0</code>, <code>xmax = 0</code>, not HEAP_ONLY</td><td><code>'I'</code>, INSERT</td></tr>
+<tr><td><code>xmin &gt; 0</code>, <code>xmax = 0</code>, HEAP_ONLY flag (<code>0x08</code>)</td><td><code>'U'</code>, UPDATE (new version)</td></tr>
+<tr><td><code>xmax &gt; 0</code>, not HOT_UPDATED (<code>0x04</code>)</td><td><code>'D'</code>, DELETE</td></tr>
+</tbody>
+</table>
+
+<p>On the primary, decoding is filtered by the committing transaction's XID. This prevents a page that comes back through the flush path from re-emitting unchanged rows as duplicate INSERTs. Consumers connect to the CDC server (<code>--cdc-port</code>) and receive one JSON object per line (NDJSON, Debezium-style <code>op</code> field).</p>
+
+<pre><code>{<span class="c-str">"event"</span>:<span class="c-str">"ready"</span>}
+{<span class="c-str">"op"</span>:<span class="c-str">"I"</span>,<span class="c-str">"table"</span>:<span class="c-str">"orders"</span>,<span class="c-str">"table_id"</span>:42,<span class="c-str">"xid"</span>:1007,<span class="c-str">"pk"</span>:<span class="c-str">""</span>,<span class="c-str">"ts"</span>:1718200000000000}
+</code></pre>
+
+<p>Up to <code>CDC_MAX_SUBSCRIBERS</code> = 32 consumers fan out from the same decode pass. This is page-image decode, not a published logical-decoding plugin API. There is no <code>REPLICA IDENTITY</code> and no column-value payload. Events carry only <code>op</code>, table, XID, and a best-effort primary-key string. The stream is one-way once established. The related declarative <a href="/3.0/ref/create-subscription/">CREATE SUBSCRIPTION</a> surface is documented separately.</p>
+
+<h2 id="raft">29.3. Raft consensus</h2>
+
+<p>Starting a node with <code>--cluster</code> and <code>--node-id</code> activates the Raft core. It provides automatic leader election and failover. EvolutionDB's Raft is a <em>leader-election + heartbeat</em> implementation. Actual log shipping reuses the WAL streaming infrastructure of <a href="#physical-replication">29.2</a> rather than carrying entries inside Raft messages.</p>
+
+<pre><code>./evosql-server --cluster node1:9968,node2:9968,node3:9968 --node-id 0
+</code></pre>
+
+<h3 id="raft-roles">29.3.1. Roles, terms &amp; election</h3>
+
+<dl class="params">
+<dt><code>FOLLOWER</code> (0)</dt><dd>Default. Resets its randomized election timer on every valid heartbeat.</dd>
+<dt><code>CANDIDATE</code> (1)</dt><dd>Election timeout elapsed. It increments the term, votes for itself, and requests votes from peers.</dd>
+<dt><code>LEADER</code> (2)</dt><dd>Won a majority vote. Sends periodic heartbeats and accepts writes.</dd>
+</dl>
+
+<p>Timing constants are defined in <code>adaptor/raft.h</code>. Heartbeat fires every <code>150</code> ms. The election timeout is randomized in <code>[300, 500)</code> ms to avoid split votes. A candidate wins with <code>g_num_nodes / 2 + 1</code> votes. A vote is granted only if the candidate's term is at least as high and the follower has not already voted this term. The candidate's <code>last_lsn</code> must also be at least as high as the follower's. This up-to-dateness check prevents a stale node from becoming leader. The maximum cluster size is <code>RAFT_MAX_NODES</code> = 7.</p>
+
+<p>Persistent Raft state includes <code>current_term</code> and <code>voted_for</code>. It is written atomically to <code>root/raft.state</code> via temp-file-plus-rename with an fsync. A restart cannot grant a second vote in the same term. Every <code>10000</code> AppendEntries the node snapshots its high-water LSN and term to <code>root/raft.snapshot</code>. There is no in-memory log to truncate in this design. The snapshot is mainly an operator artifact and a placeholder for future log-based compaction.</p>
+
+<h3 id="raft-glue">29.3.2. Failover &amp; the replication glue</h3>
+
+<p>A role transition fires a callback registered by <code>repl_install_raft_glue()</code>. When Raft elects this node LEADER, the glue clears replica state and starts the WAL sender on the bound replication port (idempotent). When Raft moves it to FOLLOWER, the role is set back to replica. This is how a follower is promoted automatically on primary failure. A manual <code>repl_promote()</code> performs the same follower-to-standalone-master transition outside Raft.</p>
+
+<h3 id="raft-fencing">29.3.3. Split-brain fencing</h3>
+
+<p>Fencing is term-based. Any node that receives a message with a higher term immediately steps down to follower, resets its vote, and persists the new term. A leader needs a current-term majority. A stale leader's term is superseded the moment a new election completes. This means two leaders cannot both retain write authority. <code>repl_check_leader_lease()</code> exposes a lease hook. In the current build it is simplified. Raft term step-down is the real fencing mechanism.</p>
+
+<h3 id="raft-members">29.3.4. Online membership &amp; cluster status</h3>
+
+<p>Members can be added or removed without a restart through <code>repl_add_member()</code> / <code>repl_remove_member()</code> (delegating to <code>raft_add_member</code> / <code>raft_remove_member</code>). Cluster health is visible from SQL.</p>
+
+<pre><code><span class="c-key">SHOW</span> CLUSTER STATUS;
+<span class="c-com">-- role | term | leader_id | my_lsn</span>
+</code></pre>
+
+<div class="callout">
+<p><strong>Honesty note on Raft.</strong> This is a pragmatic subset of the Raft paper. AppendEntries carries only a heartbeat and a last-LSN advertisement. There is no replicated command log, no log-index/commit-index matching, and no per-entry conflict resolution. Durable agreement comes from the separate WAL stream and the majority-ACK sync-commit path. Treat it as automated election + failover, not a general-purpose replicated state machine.</p>
+</div>
+
+<h2 id="distributed">29.4. Distributed query engine</h2>
+
+<p>The distributed engine makes <em>any</em> node able to serve <em>any</em> query. The system catalog is replicated to every node via the WAL stream, but data pages live only on the table's owner node. The catalog column <code>owner_node_id</code> records placement. A query touching a remote table is forwarded to its owner over the standard PostgreSQL wire protocol.</p>
+
+<p>Routing happens in <code>dist_try_route()</code> before local execution. It extracts the target table name from the statement. It understands <code>SELECT … FROM</code>, <code>INSERT INTO</code>, <code>UPDATE</code>, <code>DELETE FROM</code>, <code>DROP TABLE</code>, <code>TRUNCATE</code>, and <code>RECLAIM TABLE</code>. It resolves the table name in the catalog and then does one of three things.</p>
+
+<ul>
+<li>if the table is sharded, hands off to the shard router (<a href="#sharding">29.5</a>);</li>
+<li>if <code>owner_node_id</code> is 0 or this node, executes locally;</li>
+<li>otherwise forwards the raw SQL to the owner and relays the result set back.</li>
+</ul>
+
+<p>Forwarding opens a pooled connection per peer (one persistent socket each). It performs a trusted internal PG startup as user <code>_dist_internal</code> with no password. It sends the query as a Simple Query (<code>'Q'</code>) and reassembles <code>RowDescription</code>/<code>DataRow</code>/<code>CommandComplete</code> into a local <code>ResultSet</code>. Connection failures surface as SQLSTATE <code>08001</code> (cannot connect) or <code>08006</code> (connection lost).</p>
+
+<h3 id="placement">29.4.1. Placing and moving tables</h3>
+
+<p>A table's home node is chosen at creation with <code>ON NODE</code>. The catalog layer records the placement. You can change it afterward with <code>MOVE TABLE</code>.</p>
+
+<pre><code><span class="c-key">CREATE TABLE</span> events (id <span class="c-key">INT</span>, payload <span class="c-key">TEXT</span>) <span class="c-key">ON NODE</span> 2;
+
+<span class="c-key">MOVE TABLE</span> events <span class="c-key">TO NODE</span> 1;
+</code></pre>
+
+<p><code>MOVE TABLE</code> (<code>dist_move_table</code>) scans every row on the current owner. It replays them as <code>INSERT</code> statements forwarded to the destination. Then it destroys the local primary-key tree, secondary indexes and heap pages. It also updates the catalog fields <code>owner_node_id</code>, PK root, and heap page. If the mover is not the current owner, it forwards a <code>MOVE TABLE</code> command to the owner instead. You can inspect placement with these commands.</p>
+
+<pre><code><span class="c-key">SHOW</span> NODES;            <span class="c-com">-- node_id | host | pg_port | role (SELF/PEER)</span>
+<span class="c-key">SHOW</span> TABLE PLACEMENT;  <span class="c-com">-- table_name | schema | owner_node_id | location (LOCAL/REMOTE)</span>
+</code></pre>
+
+<h2 id="sharding">29.5. Sharding</h2>
+
+<p>Sharding splits a single logical table across several owner nodes. A shard is declared in <a href="/3.0/ref/create-table/">CREATE TABLE</a> via a table option. Each shard records its <code>shard_ordinal</code> and <code>owner_node_id</code> in the catalog. Range shards also record a <code>range_bound</code>.</p>
+
+<h3 id="hash-sharding">29.5.1. Hash sharding</h3>
+
+<pre><code><span class="c-key">CREATE TABLE</span> sessions (
+    sid   <span class="c-key">VARCHAR</span>(64) <span class="c-key">PRIMARY KEY</span>,
+    data  <span class="c-key">TEXT</span>
+) <span class="c-key">SHARD BY HASH</span>(sid) <span class="c-key">SHARDS</span> 4;
+</code></pre>
+
+<p>A key is routed by <code>hash_fnv1a(key) % shard_count</code>. This uses the FNV-1a hash also used by the engine's hash indexes. Hash routing always resolves to exactly one shard ordinal.</p>
+
+<h3 id="range-sharding">29.5.2. Range sharding</h3>
+
+<pre><code><span class="c-key">CREATE TABLE</span> ledger (
+    acct  <span class="c-key">VARCHAR</span>(32),
+    amt   <span class="c-key">NUMERIC</span>
+) <span class="c-key">SHARD BY RANGE</span>(acct) (
+    <span class="c-key">SHARD</span> s_lo <span class="c-key">VALUES LESS THAN</span> <span class="c-str">'M'</span>        <span class="c-key">ON NODE</span> 0,
+    <span class="c-key">SHARD</span> s_hi <span class="c-key">VALUES LESS THAN</span> <span class="c-key">MAXVALUE</span>   <span class="c-key">ON NODE</span> 1
+);
+</code></pre>
+
+<p>Range routing walks the shard descriptors and picks the first shard whose <code>range_bound</code> is greater than the key (string comparison). A catch-all bound declared with <code>MAXVALUE</code> is stored as an empty bound that always matches. Bounds are compared as strings. There is no numeric or collation-aware range partitioning. Use the query below to inspect shards.</p>
+
+<pre><code><span class="c-key">SHOW</span> SHARDS ledger;
+<span class="c-com">-- shard_name | ordinal | owner_node_id | range_bound | shard_type | shard_key</span>
+</code></pre>
+
+<h3 id="shard-routing">29.5.3. Shard pruning &amp; scatter-gather</h3>
+
+<p>When the distributed engine is enabled, <code>shard_try_route()</code> inspects the statement for the shard key.</p>
+
+<ul>
+<li><strong>Pruning.</strong> For an <code>INSERT</code> it reads the shard-key value from the column/VALUES list. For <code>SELECT</code>/<code>UPDATE</code>/<code>DELETE</code> it reads a <code>shard_key = value</code> equality from the <code>WHERE</code> clause. The matching shard is resolved. If the shard is remote, the whole statement is forwarded to that shard's owner. This is a single-shard query.</li>
+<li><strong>Scatter-gather.</strong> If no shard key is present, the statement is broadcast to every shard. Each local shard runs in-process. Each remote shard is forwarded over PG wire. <code>SELECT</code> results are merged (column metadata taken from the first non-empty result, rows appended) and the command tag is rewritten as <code>SELECT &lt;total_rows&gt;</code>. <code>UPDATE</code>/<code>DELETE</code> without a shard key also scatter to all shards.</li>
+</ul>
+
+<p>In standalone (non-distributed) mode every shard is local and routing is skipped. The ordinary executor handles the statement.</p>
+
+<div class="callout" id="notes">
+<p><strong>Notes &amp; limitations.</strong></p>
+<ul>
+<li><strong>Platform.</strong> Replication, Raft, distributed routing and sharding are POSIX-only. On Windows (MinGW) these files compile to stubs. Only single-node embedded mode is available.</li>
+<li><strong>Page-image WAL.</strong> Physical replication ships 4&nbsp;KB page images, not logical redo. Primary and replica must share the same page layout and TDE settings. The replica re-encrypts pages on write if TDE is enabled.</li>
+<li><strong>Shard-key extraction is textual.</strong> <code>shard.c</code> parses the shard key from raw SQL with a hand-written scanner. It handles single quotes and simple <code>WHERE col = value</code> equality only. Parameterized queries, expressions, functions, <code>IN</code> lists, joins, or multi-row <code>INSERT</code> defeat pruning and fall back to scatter-gather or local execution. Cross-shard JOINs, aggregates and <code>ORDER BY</code> are <em>not</em> reconciled. Scatter-gather concatenates rows without re-sorting or re-aggregating.</li>
+<li><strong>Raft is election-only.</strong> No replicated command log, no log-matching, and a leader lease that is effectively term-based. Durability of writes comes from the WAL stream and sync-commit, not from Raft log agreement.</li>
+<li><strong>Sync commit is server-wide.</strong> A single <code>EVOSQL_SYNC_COMMIT</code> switch with a 2&nbsp;s timeout and majority-of-active-slots quorum. There is no per-transaction control and no named quorum sets like PostgreSQL's <code>synchronous_standby_names</code>.</li>
+<li><strong>CDC payload is minimal.</strong> Events carry <code>op</code>, table, <code>xid</code>, a best-effort PK string and a timestamp, not full row images. The stream is one-way NDJSON.</li>
+<li><strong>Internal forwarding is trusted.</strong> Cross-node query forwarding authenticates as <code>_dist_internal</code> with no password. The distributed port must not be exposed to untrusted networks.</li>
+<li><strong>Cluster ceilings.</strong> <code>RAFT_MAX_NODES</code> = 7, <code>DIST_MAX_NODES</code> = 7, <code>REPL_MAX_SLOTS</code> = 16, <code>CDC_MAX_SUBSCRIBERS</code> = 32.</li>
+</ul>
+</div>
+
+<h2 id="see-also">29.6. See also</h2>
+<ul>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a>, <code>ON NODE</code>, <code>SHARD BY HASH</code>, <code>SHARD BY RANGE</code> table options.</li>
+<li><a href="/3.0/ref/show/">SHOW</a>, <code>REPLICATION STATUS</code>, <code>REPLICATION LAG</code>, <code>CLUSTER STATUS</code>, <code>NODES</code>, <code>SHARDS</code>, <code>TABLE PLACEMENT</code>.</li>
+<li><a href="/3.0/ref/create-subscription/">CREATE SUBSCRIPTION</a>, declarative logical-replication / CDC consumer surface.</li>
+<li><a href="/3.0/ref/select/">SELECT</a>, <a href="/3.0/ref/insert/">INSERT</a>, <a href="/3.0/ref/update/">UPDATE</a>, <a href="/3.0/ref/delete/">DELETE</a>, statements subject to shard pruning and distributed forwarding.</li>
+<li><a href="/3.0/ref/transaction/">Transactions</a>, interaction of <code>COMMIT</code> with synchronous replication.</li>
+</ul>
+
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Aggregate Functions | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+
+<h1>Aggregate Functions</h1>
+<p class="lede">Aggregate functions reduce a set of rows to a single value. You use them in <code>SELECT</code>, <code>HAVING</code>, and window function frames. EvolutionDB supports <code>COUNT</code>, <code>SUM</code>, <code>AVG</code>, <code>MIN</code>, <code>MAX</code>, and <code>GROUP_CONCAT</code>.</p>
+
+<p>An aggregate function runs after the <code>WHERE</code> filter. It runs before <code>ORDER BY</code>. When you add a <code>GROUP BY</code> clause, rows are split into groups first. The aggregate then runs once per group. Without <code>GROUP BY</code>, all rows form one group and the aggregate gives a single result row.</p>
+
+<p>The main implementation lives in <code>evolution/db/Select.c</code>. The join pipeline in <code>adaptor/join.c</code> handles aggregates for multi-table queries.</p>
+
+<h2 id="functions">Aggregate Functions</h2>
+
+<h3 id="count"><code>COUNT</code></h3>
+
+<div class="sig">COUNT(*)<br/>COUNT(<i>expr</i>)</div>
+
+<p><code>COUNT(*)</code> returns the number of rows in the group. It includes rows where columns are <code>NULL</code>.</p>
+
+<p><code>COUNT(<i>expr</i>)</code> counts only the rows where <i>expr</i> is not <code>NULL</code>.</p>
+
+<pre><code><span class="c-key">SELECT</span> COUNT(*), COUNT(email)
+<span class="c-key">FROM</span> users;</code></pre>
+
+<h3 id="sum"><code>SUM</code></h3>
+
+<div class="sig">SUM(<i>expr</i>)</div>
+
+<p><code>SUM</code> adds up all non-<code>NULL</code> values of <i>expr</i> in the group. When every value in the group is <code>NULL</code>, the result is <code>NULL</code>. Values are treated as numbers. Non-numeric strings contribute <code>0</code>.</p>
+
+<pre><code><span class="c-key">SELECT</span> dept_id, SUM(salary)
+<span class="c-key">FROM</span> employees
+<span class="c-key">GROUP BY</span> dept_id;</code></pre>
+
+<h3 id="avg"><code>AVG</code></h3>
+
+<div class="sig">AVG(<i>expr</i>)</div>
+
+<p><code>AVG</code> returns the mean of all non-<code>NULL</code> values. When every value is <code>NULL</code>, the result is <code>NULL</code>. When the mean is a whole number, it is shown as an integer. Otherwise it is shown with four decimal places.</p>
+
+<pre><code><span class="c-key">SELECT</span> dept_id, AVG(salary) <span class="c-key">AS</span> avg_pay
+<span class="c-key">FROM</span> employees
+<span class="c-key">GROUP BY</span> dept_id;</code></pre>
+
+<h3 id="min-max"><code>MIN</code> and <code>MAX</code></h3>
+
+<div class="sig">MIN(<i>expr</i>)<br/>MAX(<i>expr</i>)</div>
+
+<p><code>MIN</code> returns the lowest value in the group. <code>MAX</code> returns the highest. Both skip <code>NULL</code> values. When all values are <code>NULL</code>, the result is <code>NULL</code>.</p>
+
+<p>The comparison follows the same rule as the rest of the engine. When every value in the group parses cleanly as a number, the comparison is numeric. Otherwise it is a byte-by-byte string comparison.</p>
+
+<pre><code><span class="c-key">SELECT</span> MIN(price), MAX(price)
+<span class="c-key">FROM</span> products
+<span class="c-key">WHERE</span> category = <span class="c-str">'electronics'</span>;</code></pre>
+
+<h3 id="group-concat"><code>GROUP_CONCAT</code></h3>
+
+<div class="sig">GROUP_CONCAT(<i>expr</i>)<br/>GROUP_CONCAT(<i>expr</i> SEPARATOR <i>sep</i>)</div>
+
+<p><code>GROUP_CONCAT</code> joins the non-<code>NULL</code> values of the group into one string. The default separator is a comma. You can change it with the <code>SEPARATOR</code> keyword. This works the same way as the MySQL <code>GROUP_CONCAT</code> function.</p>
+
+<pre><code><span class="c-key">SELECT</span> dept_id, GROUP_CONCAT(name SEPARATOR <span class="c-str">', '</span>) <span class="c-key">AS</span> members
+<span class="c-key">FROM</span> employees
+<span class="c-key">GROUP BY</span> dept_id;</code></pre>
+
+<h2 id="grouping">Using GROUP BY</h2>
+
+<p>Add a <code>GROUP BY</code> clause to split rows into groups before the aggregate runs. Each unique combination of grouping column values forms one group. The aggregate returns one row per group.</p>
+
+<pre><code><span class="c-key">SELECT</span> dept_id, COUNT(*) <span class="c-key">AS</span> headcount, AVG(salary) <span class="c-key">AS</span> avg_pay
+<span class="c-key">FROM</span> employees
+<span class="c-key">GROUP BY</span> dept_id;</code></pre>
+
+<p>You can group by more than one column. Each unique combination of those columns forms a separate group.</p>
+
+<pre><code><span class="c-key">SELECT</span> dept_id, job_title, COUNT(*) <span class="c-key">AS</span> n
+<span class="c-key">FROM</span> employees
+<span class="c-key">GROUP BY</span> dept_id, job_title;</code></pre>
+
+<div class="callout">
+<p><strong>Non-grouped columns.</strong> The SQL standard requires every non-aggregated column in the select list to appear in <code>GROUP BY</code>. EvolutionDB does not enforce this rule. When you select a column that is not in <code>GROUP BY</code>, the engine uses the value from the first row of the group. This is the MySQL permissive behavior. PostgreSQL raises an error in the same situation.</p>
+</div>
+
+<h2 id="having">Filtering Groups with HAVING</h2>
+
+<p><code>HAVING</code> filters groups after the aggregate is computed. It works like <code>WHERE</code> but runs on the grouped result. You can reference aggregate functions directly in a <code>HAVING</code> condition.</p>
+
+<pre><code><span class="c-key">SELECT</span> dept_id, COUNT(*) <span class="c-key">AS</span> headcount
+<span class="c-key">FROM</span> employees
+<span class="c-key">GROUP BY</span> dept_id
+<span class="c-key">HAVING</span> COUNT(*) &gt; <span class="c-str">3</span>;</code></pre>
+
+<p>You can also reference the alias from the select list in <code>HAVING</code>. The engine matches the alias name to the already-computed aggregate value.</p>
+
+<pre><code><span class="c-key">SELECT</span> dept_id, AVG(salary) <span class="c-key">AS</span> avg_pay
+<span class="c-key">FROM</span> employees
+<span class="c-key">GROUP BY</span> dept_id
+<span class="c-key">HAVING</span> avg_pay &gt; <span class="c-str">60000</span>;</code></pre>
+
+<p>When <code>HAVING</code> references an aggregate that is not in the select list, the engine computes it separately for the filter step.</p>
+
+<h2 id="rollup">WITH ROLLUP</h2>
+
+<p><code>GROUP BY ... WITH ROLLUP</code> adds summary rows to the result. After each group, a super-aggregate row appears. It shows the aggregate over the whole set for that grouping level. The grouping column in a summary row is shown as <code>NULL</code>.</p>
+
+<pre><code><span class="c-key">SELECT</span> dept_id, job_title, COUNT(*) <span class="c-key">AS</span> n
+<span class="c-key">FROM</span> employees
+<span class="c-key">GROUP BY</span> dept_id, job_title <span class="c-key">WITH ROLLUP</span>;</code></pre>
+
+<p>The above query produces one row per group. Then it adds a subtotal row for each <code>dept_id</code>. Finally it adds a grand total row where both <code>dept_id</code> and <code>job_title</code> are <code>NULL</code>.</p>
+
+<h2 id="nulls">NULL Handling</h2>
+
+<p>All aggregate functions ignore <code>NULL</code> values. The only exception is <code>COUNT(*)</code>, which counts every row regardless of <code>NULL</code>.</p>
+
+<table>
+<thead><tr><th>Function</th><th>All values NULL</th><th>Some values NULL</th></tr></thead>
+<tbody>
+<tr><td><code>COUNT(*)</code></td><td>Returns count of rows</td><td>Counts all rows</td></tr>
+<tr><td><code>COUNT(<i>expr</i>)</code></td><td><code>0</code></td><td>Counts only non-<code>NULL</code></td></tr>
+<tr><td><code>SUM</code></td><td><code>NULL</code></td><td>Sums only non-<code>NULL</code></td></tr>
+<tr><td><code>AVG</code></td><td><code>NULL</code></td><td>Averages only non-<code>NULL</code></td></tr>
+<tr><td><code>MIN</code> / <code>MAX</code></td><td><code>NULL</code></td><td>Compares only non-<code>NULL</code></td></tr>
+<tr><td><code>GROUP_CONCAT</code></td><td>Empty string</td><td>Joins only non-<code>NULL</code></td></tr>
+</tbody>
+</table>
+
+<h2 id="window">Aggregates as Window Functions</h2>
+
+<p>You can use aggregate functions as window functions by adding an <code>OVER</code> clause. This computes the aggregate over a sliding frame rather than collapsing rows into one. The result row is kept. Each row receives its own aggregate value.</p>
+
+<pre><code><span class="c-key">SELECT</span> name, salary,
+       SUM(salary) <span class="c-key">OVER</span> (PARTITION <span class="c-key">BY</span> dept_id) <span class="c-key">AS</span> dept_total
+<span class="c-key">FROM</span> employees;</code></pre>
+
+<p>See <a href="/3.0/sql/queries/#grouping">Chapter 7, Grouping and Aggregates</a> for how the grouping path works inside the engine. See <a href="/3.0/ref/select/">SELECT</a> for the full syntax of <code>GROUP BY</code>, <code>HAVING</code>, and <code>OVER</code>.</p>
+
+<h2 id="examples">Examples</h2>
+
+<p>This example counts all rows and also counts only the rows that have a non-null email.</p>
+<pre><code><span class="c-key">SELECT</span> COUNT(*) <span class="c-key">AS</span> total, COUNT(email) <span class="c-key">AS</span> with_email
+<span class="c-key">FROM</span> users;</code></pre>
+
+<p>This example finds the total and average salary per department. It returns only departments with more than three employees.</p>
+<pre><code><span class="c-key">SELECT</span> dept_id,
+       COUNT(*)       <span class="c-key">AS</span> headcount,
+       SUM(salary)    <span class="c-key">AS</span> total_pay,
+       AVG(salary)    <span class="c-key">AS</span> avg_pay,
+       MIN(salary)    <span class="c-key">AS</span> lowest,
+       MAX(salary)    <span class="c-key">AS</span> highest
+<span class="c-key">FROM</span> employees
+<span class="c-key">GROUP BY</span> dept_id
+<span class="c-key">HAVING</span> COUNT(*) &gt; <span class="c-str">3</span>
+<span class="c-key">ORDER BY</span> avg_pay <span class="c-key">DESC</span>;</code></pre>
+
+<p>This example builds a comma-separated list of product names for each category.</p>
+<pre><code><span class="c-key">SELECT</span> category, GROUP_CONCAT(name <span class="c-key">ORDER BY</span> name <span class="c-key">SEPARATOR</span> <span class="c-str">', '</span>) <span class="c-key">AS</span> products
+<span class="c-key">FROM</span> items
+<span class="c-key">GROUP BY</span> category;</code></pre>
+
+<p>This example shows a running department total alongside each employee row using a window function.</p>
+<pre><code><span class="c-key">SELECT</span> name, dept_id, salary,
+       SUM(salary) <span class="c-key">OVER</span> (PARTITION <span class="c-key">BY</span> dept_id) <span class="c-key">AS</span> dept_total
+<span class="c-key">FROM</span> employees
+<span class="c-key">ORDER BY</span> dept_id, name;</code></pre>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/sql/queries/#grouping">Chapter 7, Grouping and Aggregates</a></li>
+<li><a href="/3.0/ref/select/">SELECT</a></li>
+<li><a href="/3.0/sql/functions/">Chapter 9, Functions and Operators</a></li>
+</ul>
+
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>B+ Tree | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>B+ Tree</h1>
+<p class="lede">EvoSQL uses a page-based B+ tree called <code>btree2</code> for all O(log n) key-value indexing. Every primary key index, secondary index, and system catalog tree is a B+ tree instance. Keys are variable-length strings up to 255 bytes. Values are <code>RowID</code> structs that point to heap records.</p>
+
+<h2 id="overview">Overview</h2>
+<p>EvoSQL uses a page-based B+ tree called <code>btree2</code> for all O(log n) key-value indexing. Every primary key index, secondary index, and system catalog tree is a B+ tree instance. Keys are variable-length strings up to 255 bytes. Values are <code>RowID</code> structs that point to heap records. All tree nodes are stored as 4KB pages managed by the <a href="/3.0/page-manager-and-slotted-pages/">Page Manager</a>. All I/O passes through the Clock Sweep buffer pool.</p>
+<p>The tree has these key properties.</p>
+<ul>
+<li><strong>Key format.</strong> Length-prefixed string. It uses 1 byte for length plus up to 255 bytes of data. The limit is <code>BT2_MAX_KEY_LEN = 255</code>.</li>
+<li><strong>Value format.</strong> A <code>RowID { page_no: uint32_t, slot_idx: uint16_t }</code>. This is 6 bytes.</li>
+<li><strong>Numeric-aware comparison.</strong> Pure numeric strings are compared by numeric value, so <code>"2" &lt; "10"</code>. Non-numeric keys fall back to lexicographic order.</li>
+<li><strong>Node capacity.</strong> About 4076 usable bytes per node. This is 4096 minus the 16-byte PageHeader minus the 4-byte NodeHeader.</li>
+<li><strong>Deletion strategy.</strong> Deletion is lazy. Deleted entries have their RowID set to <code>{0, 0}</code>. The key slot is reused on re-insert of the same key.</li>
+</ul>
+<p>The <code>BTree2</code> handle is a single struct that holds the root page number.</p>
+<pre><code><span class="c-key">typedef</span> <span class="c-key">struct</span> {
+    <span class="c-key">uint32_t</span> root_page;   <span class="c-com">/* 0 = empty tree */</span>
+} <span class="c-fn">BTree2</span>;</code></pre>
+
+<h2 id="node-structure">Node Structure</h2>
+<p>Every B+ tree node occupies exactly one 4KB page. The first 16 bytes are the standard <code>PageHeader</code>. A 4-byte <code>NodeHeader</code> follows. The key/pointer data area comes after that. The page type field in <code>PageHeader</code> distinguishes internal nodes from leaf nodes. Internal nodes use <code>PAGE_BTREE_INT = 2</code>. Leaf nodes use <code>PAGE_BTREE_LEAF = 3</code>.</p>
+
+<h3 id="node-header">NodeHeader</h3>
+<pre><code><span class="c-key">typedef</span> <span class="c-key">struct</span> {
+    <span class="c-key">uint16_t</span> num_keys;   <span class="c-com">/* number of keys stored in this node */</span>
+    <span class="c-key">uint16_t</span> flags;      <span class="c-com">/* reserved, must be 0 */</span>
+} <span class="c-fn">NodeHeader</span>;</code></pre>
+<p>The position within the page is fixed.</p>
+<pre><code>Offset 0:   PageHeader  (16 bytes)
+Offset 16:  NodeHeader  (4 bytes)
+Offset 20:  Key/pointer data area  (4076 bytes)</code></pre>
+
+<h3 id="leaf-layout">Leaf Node Layout</h3>
+<p>Leaf nodes store sorted key-RowID pairs. Each entry is a length-prefixed key followed by a 6-byte RowID. Leaf nodes are doubly linked through <code>PageHeader.next_page</code> and <code>PageHeader.prev_page</code> for sequential scans.</p>
+<pre><code>┌──────────────────────────────────────────────────────┐
+│ PageHeader (16B)                                     │
+│   page_type = PAGE_BTREE_LEAF                        │
+│   page_id, next_page (→ right leaf), prev_page       │
+├──────────────────────────────────────────────────────┤
+│ NodeHeader (4B)                                      │
+│   num_keys, flags                                    │
+├──────────────────────────────────────────────────────┤
+│ Entry 0: [klen:1B][key_data:klen B][RowID:6B]        │
+│ Entry 1: [klen:1B][key_data:klen B][RowID:6B]        │
+│ Entry 2: [klen:1B][key_data:klen B][RowID:6B]        │
+│ ...                                                  │
+│ (entries sorted by key)                              │
+│                                                      │
+│              ← free space →                          │
+└──────────────────────────────────────────────────────┘</code></pre>
+<p>The entry overhead per key is <code>1 (length byte) + key_length + 6 (RowID)</code>. This equals 7 plus key_length bytes. For a typical 20-byte key, each entry is 27 bytes. That yields about 150 entries per leaf.</p>
+
+<h3 id="internal-layout">Internal Node Layout</h3>
+<p>Internal nodes store separator keys interleaved with child page pointers. With <code>N</code> keys there are <code>N+1</code> child pointers. The first child pointer precedes the first key. Each later key is followed by the child pointer for keys greater than or equal to that separator.</p>
+<pre><code>┌──────────────────────────────────────────────────────┐
+│ PageHeader (16B)                                     │
+│   page_type = PAGE_BTREE_INT                         │
+│   page_id                                            │
+├──────────────────────────────────────────────────────┤
+│ NodeHeader (4B)                                      │
+│   num_keys, flags                                    │
+├──────────────────────────────────────────────────────┤
+│ child0 (4B)                                          │
+│ [key0_len:1B][key0_data:N B]                         │
+│ child1 (4B)                                          │
+│ [key1_len:1B][key1_data:N B]                         │
+│ child2 (4B)                                          │
+│ ...                                                  │
+│ childN (4B)                                          │
+│                                                      │
+│              ← free space →                          │
+└──────────────────────────────────────────────────────┘</code></pre>
+<p>The entry overhead per key is <code>4 (child pointer) + 1 (length byte) + key_length</code> bytes. There is also a trailing 4-byte child pointer at the end. For a typical 20-byte key, the fan-out is about 160 to 170 children per internal node. With this fan-out, a tree of depth 3 can index over 4 million keys.</p>
+
+<h3 id="leaf-chain">Leaf Chain (Doubly Linked)</h3>
+<p>All leaf nodes are connected into a doubly linked list through <code>PageHeader.next_page</code> and <code>PageHeader.prev_page</code>. This enables efficient sequential and range scans. The engine does not need to traverse the tree from the root for each next-key lookup.</p>
+<pre><code>           ┌────────┐     ┌────────┐     ┌────────┐
+  ... ←────│ Leaf A │←───→│ Leaf B │←───→│ Leaf C │────→ ...
+           │ prev=? │     │prev= A │     │prev= B │
+           │ next=B │     │next= C │     │ next=0 │
+           └────────┘     └────────┘     └────────┘</code></pre>
+
+<h2 id="operations">Key Operations</h2>
+
+<h3 id="bt2-create">bt2_create · Allocate Root Page</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">bt2_create</span>(<span class="c-fn">BTree2</span> *tree);</code></pre>
+<p>This allocates a single page of type <code>PAGE_BTREE_LEAF</code> through <code>pgm_alloc_page()</code>. It initializes the page as an empty leaf node with num_keys = 0. It writes the page to disk and stores the page number in <code>tree-&gt;root_page</code>.</p>
+<p>It returns 0 on success and -1 on allocation failure.</p>
+<p>A tree with <code>root_page == 0</code> is considered empty. <code>bt2_insert()</code> calls <code>bt2_create()</code> automatically if the root is 0, so explicit creation is optional.</p>
+
+<h3 id="bt2-insert">bt2_insert · Insert Key/RowID</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">bt2_insert</span>(<span class="c-fn">BTree2</span> *tree, <span class="c-key">const</span> <span class="c-key">char</span> *key, <span class="c-fn">RowID</span> rid);</code></pre>
+<p>This inserts a key-RowID mapping into the tree. The key must not exceed <code>BT2_MAX_KEY_LEN</code>, which is 255 bytes.</p>
+<p>The return values are these.</p>
+<ul>
+<li><code>0</code>. Success.</li>
+<li><code>1</code>. Duplicate key. The key already exists with a non-deleted RowID.</li>
+<li><code>-1</code>. Error. This means an allocation failure or a key that is too long.</li>
+</ul>
+<p>The algorithm runs in these steps.</p>
+<ol>
+<li>If the tree is empty with <code>root_page == 0</code>, create a root leaf automatically.</li>
+<li>Call <code>insert_recursive()</code> starting at the root page.</li>
+<li>The recursive function descends through internal nodes to the correct leaf.</li>
+<li>At the leaf, it does the following work.
+  <ul>
+  <li>Scan entries to find the sorted insertion position.</li>
+  <li>If the key already exists with a deleted RowID of <code>{0, 0}</code>, reuse the slot by overwriting the RowID. Return 0.</li>
+  <li>If the key exists with a live RowID, return 1 for duplicate.</li>
+  <li>If the entry fits in the leaf's free space, shift later entries right and write the entry. Return 0.</li>
+  <li>If the leaf is full, perform a leaf split. See <a href="#splitting">Tree Splitting</a>.</li>
+  </ul>
+</li>
+<li>If a split propagated up and the root itself split, allocate a new root internal node. The new root holds the separator key and two children. These are the old root and the new sibling.</li>
+</ol>
+
+<h3 id="bt2-search">bt2_search · Exact Key Lookup</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">bt2_search</span>(<span class="c-fn">BTree2</span> *tree, <span class="c-key">const</span> <span class="c-key">char</span> *key, <span class="c-fn">RowID</span> *out_rid);</code></pre>
+<p>This searches for an exact key match. It descends from the root through internal nodes using <code>find_leaf()</code>. Then it performs a linear scan of the leaf's entries.</p>
+<p>The return values are these.</p>
+<ul>
+<li><code>0</code>. Found. The RowID is written to <code>*out_rid</code>.</li>
+<li><code>-1</code>. Not found. This also covers a key that exists but is marked deleted with <code>RowID == {0, 0}</code>.</li>
+</ul>
+<p>The descent logic in <code>find_leaf</code> works as follows. At each internal node it scans separator keys from left to right. It follows <code>child[i]</code> where <code>i</code> is the index of the first separator key greater than the search key. If no separator is greater, it follows the rightmost child.</p>
+
+<h3 id="bt2-delete">bt2_delete · Logical Delete</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">bt2_delete</span>(<span class="c-fn">BTree2</span> *tree, <span class="c-key">const</span> <span class="c-key">char</span> *key);</code></pre>
+<p>This performs a lazy logical delete. It descends to the leaf that contains the key. It overwrites the entry's RowID with the sentinel value <code>{0, 0}</code>. The key bytes stay in the leaf. The slot is reused if the same key is re-inserted.</p>
+<p>The return values are these.</p>
+<ul>
+<li><code>0</code>. Success.</li>
+<li><code>-1</code>. The key was not found, or it was already deleted.</li>
+</ul>
+<p>No merging or rebalancing is performed. This keeps the implementation simple. It avoids the complexity of B+ tree node merges. Over time, leaves may accumulate deleted entries. Re-inserts of the same key reclaim those slots.</p>
+
+<h3 id="bt2-update">bt2_update · Update RowID for Existing Key</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">bt2_update</span>(<span class="c-fn">BTree2</span> *tree, <span class="c-key">const</span> <span class="c-key">char</span> *key, <span class="c-fn">RowID</span> new_rid);</code></pre>
+<p>This finds the leaf entry for the given key. It overwrites its RowID with <code>new_rid</code>. This is used when a heap record moves to a different page. For example, an UPDATE that changes record size moves the record. The index must then point to the record's updated location.</p>
+<p>The return values are these.</p>
+<ul>
+<li><code>0</code>. Success.</li>
+<li><code>-1</code>. The key was not found.</li>
+</ul>
+<div class="callout callout-note"><span class="material-symbols-outlined">info</span><div><code>bt2_update()</code> does not check whether the existing RowID is deleted. It unconditionally overwrites the RowID. This means it can also undelete an entry by writing a valid RowID over a <code>{0, 0}</code> sentinel.</div></div>
+
+<h3 id="bt2-destroy">bt2_destroy · Recursive Page Freeing</h3>
+<pre><code><span class="c-key">void</span> <span class="c-fn">bt2_destroy</span>(<span class="c-fn">BTree2</span> *tree);</code></pre>
+<p>This recursively frees every page in the tree by walking the tree depth-first. At each internal node it recurses into all children before freeing the node's own page through <code>pgm_free_page()</code>. Leaf pages are freed directly.</p>
+<p>After completion, <code>tree-&gt;root_page</code> is set to 0. This is used by <code>DROP TABLE</code> and <code>DROP INDEX</code> to reclaim all storage.</p>
+
+<h2 id="cursor">Cursor API</h2>
+<p>The cursor API provides sequential iteration over the B+ tree's leaf chain. It supports full scans and prefix-based range scans.</p>
+<pre><code><span class="c-key">typedef</span> <span class="c-key">struct</span> {
+    <span class="c-key">uint32_t</span> cur_page;    <span class="c-com">/* current leaf page (0 = exhausted) */</span>
+    <span class="c-key">uint16_t</span> cur_idx;     <span class="c-com">/* current key index within leaf */</span>
+} <span class="c-fn">BTree2Cursor</span>;</code></pre>
+
+<h3 id="cursor-first">bt2_cursor_first · Position at Smallest Key</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">bt2_cursor_first</span>(<span class="c-fn">BTree2</span> *tree, <span class="c-fn">BTree2Cursor</span> *cur);</code></pre>
+<p>This descends to the leftmost leaf by always following <code>child[0]</code> at each internal node. It sets the cursor to the first non-deleted entry. If all entries in the first leaf are deleted, it follows <code>next_page</code> to find the first active entry.</p>
+<p>It returns 0 on success. It returns -1 if the tree is empty or contains only deleted entries.</p>
+
+<h3 id="cursor-next">bt2_cursor_next · Advance to Next Entry</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">bt2_cursor_next</span>(<span class="c-fn">BTree2Cursor</span> *cur, <span class="c-key">char</span> *key_out, <span class="c-fn">RowID</span> *rid_out);</code></pre>
+<p>This returns the current entry's key and RowID, then advances the cursor. The key is null-terminated and at most <code>BT2_MAX_KEY_LEN + 1</code> bytes. It automatically skips deleted entries with RowID <code>{0, 0}</code>. It follows the leaf chain when the current leaf is exhausted.</p>
+<p>It returns 0 on success. It returns -1 when no more entries remain.</p>
+<p>The typical iteration pattern looks like this.</p>
+<pre><code><span class="c-fn">BTree2Cursor</span> cur;
+<span class="c-fn">bt2_cursor_first</span>(&amp;tree, &amp;cur);
+<span class="c-key">char</span> key[<span class="c-fn">BT2_MAX_KEY_LEN</span> + <span class="c-str">1</span>];
+<span class="c-fn">RowID</span> rid;
+<span class="c-key">while</span> (<span class="c-fn">bt2_cursor_next</span>(&amp;cur, key, &amp;rid) == <span class="c-str">0</span>) {
+    <span class="c-com">// process key, rid</span>
+}</code></pre>
+
+<h3 id="cursor-seek">bt2_cursor_seek · Position at Key or First Key &gt;= Key</h3>
+<pre><code><span class="c-key">int</span> <span class="c-fn">bt2_cursor_seek</span>(<span class="c-fn">BTree2</span> *tree, <span class="c-key">const</span> <span class="c-key">char</span> *key, <span class="c-fn">BTree2Cursor</span> *cur);</code></pre>
+<p>This descends to the leaf that contains the given key. It uses the same <code>find_leaf()</code> logic as <code>bt2_search</code>. Then it scans the leaf to find the first entry whose key is greater than or equal to the search key. If all keys in the leaf are smaller, it follows <code>next_page</code>.</p>
+<p>This is the primary mechanism for prefix-based range scans. The <a href="/3.0/system-catalog/">system catalog</a> uses composite keys with zero-padded IDs such as <code>"0000000001:tablename"</code>. A call to <code>bt2_cursor_seek("0000000001:")</code> positions the cursor at the first entry for table ID 1. Iteration continues with <code>bt2_cursor_next()</code> until the prefix no longer matches.</p>
+<p>It returns 0 on success. It returns -1 if no key greater than or equal to the search key exists.</p>
+
+<h2 id="splitting">Tree Splitting</h2>
+<p>When a leaf or internal node runs out of space during insertion, the node is split into two siblings. A separator key is promoted to the parent. If the parent is also full, the split propagates upward recursively. If the root itself splits, a new root is created. This increases the tree height by one.</p>
+
+<h3 id="leaf-split">Leaf Split</h3>
+<ol>
+<li>The insertion target leaf is full. Used bytes plus entry size is greater than 4076.</li>
+<li>A temporary oversized buffer is created. The new entry is inserted at its sorted position.</li>
+<li>The entries are divided at the midpoint with <code>mid = total_keys / 2</code>.</li>
+<li>Entries <code>[0, mid)</code> stay in the original page.</li>
+<li>Entries <code>[mid, total)</code> are copied to a newly allocated leaf page.</li>
+<li>The leaf chain is updated as follows.
+  <ul>
+  <li>New leaf's <code>next_page</code> = old leaf's former <code>next_page</code>.</li>
+  <li>New leaf's <code>prev_page</code> = old leaf's <code>page_id</code>.</li>
+  <li>Old leaf's <code>next_page</code> = new leaf's <code>page_id</code>.</li>
+  <li>If a leaf existed after the old leaf, its <code>prev_page</code> is updated to point to the new leaf.</li>
+  </ul>
+</li>
+<li>The separator key, which is the first key of the new leaf, is promoted to the parent.</li>
+</ol>
+<pre><code>BEFORE (leaf full, inserting "F"):
+
+    ┌────────────────────────────────────────┐
+    │ Leaf: [A][B][C][D][E][G][H]  (FULL)    │
+    └────────────────────────────────────────┘
+
+AFTER (split at midpoint, "E" promoted):
+
+              separator = "E"
+                   │
+                   ▼
+    ┌──── parent receives ("E", ptr→new leaf) ────┐
+    │                                              │
+    ▼                                              ▼
+  ┌─────────────────┐    next    ┌─────────────────┐
+  │ [A][B][C][D]    │──────────→│ [E][F][G][H]    │
+  │ Old Leaf        │←──────────│ New Leaf        │
+  └─────────────────┘    prev    └─────────────────┘</code></pre>
+
+<h3 id="internal-split">Internal Node Split</h3>
+<ol>
+<li>The internal node is full. It cannot fit the new separator key plus child pointer.</li>
+<li>A temporary oversized buffer is created. The new separator is inserted at its correct position.</li>
+<li>The entries are divided at the midpoint. The middle key is <strong>not</strong> kept in either sibling. It is promoted to the parent.</li>
+<li>Keys <code>[0, mid)</code> and children <code>[0, mid]</code> stay in the original node.</li>
+<li>The key at index <code>mid</code> is sent up to the parent.</li>
+<li>Keys <code>[mid+1, total)</code> and children <code>[mid+1, total]</code> go to the new internal node.</li>
+</ol>
+<pre><code>BEFORE (internal node full, inserting separator "M"):
+
+  ┌─────────────────────────────────────────────────┐
+  │ Internal: [ptr0] D [ptr1] G [ptr2] J [ptr3]     │
+  │           K [ptr4] P [ptr5] S [ptr6]  (FULL)     │
+  └─────────────────────────────────────────────────┘
+
+AFTER (split, "K" promoted to parent):
+
+                    "K" promoted
+                       │
+                       ▼
+           ┌──── parent receives ("K", ptr→right) ────┐
+           │                                           │
+           ▼                                           ▼
+  ┌────────────────────────┐          ┌────────────────────────┐
+  │ [ptr0] D [ptr1] G      │          │ [ptr3] M [ptr4] P      │
+  │        [ptr2] J [ptr3] │          │        [ptr5] S [ptr6] │
+  │ Left (original)        │          │ Right (new)            │
+  └────────────────────────┘          └────────────────────────┘</code></pre>
+
+<h3 id="root-split">Root Split</h3>
+<p>When the current root splits, <code>bt2_insert()</code> allocates a new internal node as the root. This new root has exactly one separator key. It has two children, which are the old root and its new sibling. It becomes the new <code>tree-&gt;root_page</code>. This is the only operation that increases the tree's height.</p>
+<pre><code>BEFORE:
+         root (leaf or internal, now split)
+              │
+        ┌─────┴─────┐
+    old_root     new_sibling
+
+AFTER:
+            new_root
+           /    │    \
+     child0   "sep"  child1
+       │                │
+   old_root        new_sibling</code></pre>
+
+<h2 id="sentinel">Sentinel RowID</h2>
+<p>The RowID value <code>{page_no = 0, slot_idx = 0}</code> is the universal deleted sentinel. Page 0 is always the file header and can never contain user data. This value is therefore guaranteed to be invalid as a record pointer.</p>
+<p>The sentinel behaves like this across the API.</p>
+<table>
+<thead><tr><th>Operation</th><th>Behavior</th></tr></thead>
+<tbody>
+<tr><td><code>bt2_search()</code></td><td>Returns -1 for not found if the matching entry has RowID <code>{0, 0}</code></td></tr>
+<tr><td><code>bt2_delete()</code></td><td>Writes <code>{0, 0}</code> over the entry's RowID</td></tr>
+<tr><td><code>bt2_insert()</code></td><td>If a key exists with RowID <code>{0, 0}</code>, reuses the slot and writes the live RowID</td></tr>
+<tr><td><code>bt2_cursor_next()</code></td><td>Silently skips entries with RowID <code>{0, 0}</code></td></tr>
+<tr><td><code>bt2_cursor_first()</code></td><td>Skips leading deleted entries and advances to the next leaf if needed</td></tr>
+</tbody>
+</table>
+
+<h2 id="key-comparison">Key Comparison</h2>
+<p>The <code>key_cmp()</code> function implements numeric-aware comparison. It works in these steps.</p>
+<ol>
+<li>Attempt to parse both keys as floating-point numbers with <code>strtod</code>.</li>
+<li>If both parse successfully with no trailing characters, compare numerically.</li>
+<li>Otherwise, fall back to lexicographic comparison. This uses <code>memcmp</code> with length tie-breaking.</li>
+</ol>
+<p>This ensures that numeric primary keys sort naturally, so <code>"2" &lt; "10"</code> rather than <code>"10" &lt; "2"</code>. String keys retain standard dictionary order.</p>
+
+<h2 id="max-key-length">Max Key Length</h2>
+<p>The maximum key length is <strong>255 bytes</strong> through <code>BT2_MAX_KEY_LEN</code>. This is constrained by the 1-byte length prefix used in the node entry format. <code>bt2_insert()</code> rejects keys longer than this limit with a return value of -1.</p>
+<p>In practice, keys are much shorter.</p>
+<ul>
+<li><strong>Primary key indexes.</strong> The string representation of column values. This is typically 5 to 40 bytes.</li>
+<li><strong>System catalog composite keys.</strong> Zero-padded 10-digit IDs with a <code>:</code> separator. For example <code>"0000000001:users"</code> is 17 bytes.</li>
+<li><strong>Secondary index keys.</strong> The column value concatenated with the primary key for uniqueness.</li>
+</ul>
+
+<h2 id="usage">Usage</h2>
+<p>The B+ tree is the sole indexing structure in EvoSQL. Every index is a <code>BTree2</code> instance. This holds for user tables and for internal metadata.</p>
+
+<h3 id="usage-catalog">System Catalog</h3>
+<p>The system catalog uses 8 B+ trees for all metadata. They are stored in <code>FileHeader.catalog_roots[]</code>.</p>
+<table>
+<thead><tr><th>CatalogID</th><th>Tree</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td><code>CAT_SYS_DATABASES</code></td><td>Databases</td><td>Database name to database record</td></tr>
+<tr><td><code>CAT_SYS_SCHEMAS</code></td><td>Schemas</td><td><code>db_id:schema_name</code> to schema record</td></tr>
+<tr><td><code>CAT_SYS_TABLES</code></td><td>Tables</td><td><code>schema_id:table_name</code> to table record</td></tr>
+<tr><td><code>CAT_SYS_COLUMNS</code></td><td>Columns</td><td><code>table_id:ordinal</code> to column record</td></tr>
+<tr><td><code>CAT_SYS_INDEXES</code></td><td>Indexes</td><td><code>table_id:index_name</code> to index record</td></tr>
+<tr><td><code>CAT_SYS_CONSTRAINTS</code></td><td>Constraints</td><td><code>table_id:constraint_name</code> to constraint record</td></tr>
+<tr><td><code>CAT_SYS_USERS</code></td><td>Users</td><td>Username to user record</td></tr>
+<tr><td><code>CAT_SYS_GRANTS</code></td><td>Grants</td><td>Grant key to privilege record</td></tr>
+</tbody>
+</table>
+<p>Catalog trees use composite keys with zero-padded IDs and <code>:</code> separators. <code>bt2_cursor_seek()</code> with a prefix like <code>"0000000005:"</code> enables efficient iteration over all entries that belong to a specific parent. For example it can iterate over all columns of table 5.</p>
+
+<h3 id="usage-pk">Primary Key Indexes</h3>
+<p>Every table with a primary key has an associated B+ tree. The key is the string representation of the primary key column values. The RowID points to the heap page and slot where the full record is stored. <code>INSERT</code> checks for duplicates through <code>bt2_search()</code> before inserting. <code>SELECT ... WHERE pk = value</code> uses <code>bt2_search()</code> for O(log n) point lookups. See <a href="/3.0/table-api-and-dml/">Table API and DML</a>.</p>
+
+<h3 id="usage-secondary">Secondary Indexes</h3>
+<p>Secondary indexes created through <code>CREATE INDEX</code> are also B+ trees. <code>Index.c</code> populates the tree by scanning the table's heap pages with <code>tapi_scan</code> and inserting one entry per row.</p>
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

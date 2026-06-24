@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CHECKPOINT | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>CHECKPOINT</h1>
+<p class="lede">Write to and read from a <em>checkpoint store</em>. A checkpoint store is a native, table-backed key/value log of agent execution state. It works as a server-side backend for the LangGraph <code>BaseCheckpointSaver</code> API.</p>
+
+<div class="callout">
+<p><strong>Not the PostgreSQL <code>CHECKPOINT</code>.</strong> In PostgreSQL, <code>CHECKPOINT</code> is a server admin command. It forces a write-ahead-log checkpoint to disk. EvolutionDB does <strong>not</strong> use the <code>CHECKPOINT</code> keyword for that. Here, <code>CHECKPOINT</code> is the data-access verb for checkpoint stores. It inserts rows of saved agent state with <code>PUT</code>. It reads them back with <code>GET</code> and <code>LIST</code>. You create and destroy the stores themselves with <code>CREATE CHECKPOINT STORE</code> and <code>DROP CHECKPOINT STORE</code>.</p>
+</div>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-com">-- Store definition (DDL)</span>
+<span class="c-key">CREATE CHECKPOINT STORE</span> <span class="opt">[ <span class="c-key">IF NOT EXISTS</span> ]</span> <var>name</var>
+    <span class="opt">[ <span class="c-key">WITH</span> ( <span class="c-key">RETENTION</span> = <var>interval</var> ) ]</span>
+
+<span class="c-key">DROP CHECKPOINT STORE</span> <span class="opt">[ <span class="c-key">IF EXISTS</span> ]</span> <var>name</var> <span class="opt">[ <span class="c-key">CASCADE</span> ]</span>
+
+<span class="c-com">-- Store access (DML)</span>
+<span class="c-key">CHECKPOINT PUT</span> <span class="opt">[ <span class="c-key">WRITES</span> ]</span> <span class="c-key">INTO</span> <var>name</var> <span class="c-key">VALUES</span> (
+    <var>thread_id</var>, <var>checkpoint_ns</var>, <var>checkpoint_id</var>, <var>parent_id</var>,
+    <var>values</var>, <var>metadata</var>, <var>parent_config</var> )
+
+<span class="c-key">CHECKPOINT GET FROM</span> <var>name</var> <span class="c-key">THREAD</span> <var>thread_id</var> <span class="opt">[ <span class="c-key">AT</span> <var>checkpoint_id</var> ]</span>
+
+<span class="c-key">CHECKPOINT LIST FROM</span> <var>name</var> <span class="c-key">THREAD</span> <var>thread_id</var> <span class="opt">[ <span class="c-key">LIMIT</span> <var>count</var> ]</span></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p>A <em>checkpoint store</em> is a named object. It saves the middle state of a long-running agent run. This lets you pause, resume, branch, and audit the run. EvolutionDB builds it as ordinary catalog state on top of the regular storage engine. <code>CREATE CHECKPOINT STORE <var>name</var></code> adds an entry in the system catalog. It also auto-creates a backing heap table named <code>ck_<var>name</var></code> with a fixed schema. Every <code>CHECKPOINT</code> data statement turns into a plain <code>INSERT</code> or <code>SELECT</code> against that backing table. So checkpoint writes and reads use the same MVCC visibility, row-level security, triggers, and replication as any hand-written DML.</p>
+
+<p>The backing table has eight columns. They always appear in this order.</p>
+<dl class="params">
+<dt><code>thread_id</code> <span class="c-com">VARCHAR(255) NOT NULL</span></dt>
+<dd>Names the conversation or run that a checkpoint belongs to. All reads filter on this key.</dd>
+<dt><code>checkpoint_ns</code> <span class="c-com">VARCHAR(255)</span></dt>
+<dd>The checkpoint namespace. LangGraph uses it for nested sub-graphs. It can be null. An empty string is stored as <code>NULL</code>.</dd>
+<dt><code>checkpoint_id</code> <span class="c-com">VARCHAR(255) PRIMARY KEY</span></dt>
+<dd>The unique id of this checkpoint. It is the primary key. <code>GET … AT</code> matches on this value.</dd>
+<dt><code>parent_id</code> <span class="c-com">VARCHAR(255)</span></dt>
+<dd>The id of the checkpoint that this one comes from. This is what makes branching and time-travel possible. It can be null.</dd>
+<dt><code>ck_values</code> <span class="c-com">JSON</span></dt>
+<dd>The serialized channel values and graph state. It shows up in the <code>VALUES</code> list as <var>values</var>. It is stored under the column name <code>ck_values</code>. This avoids the reserved word <code>values</code>.</dd>
+<dt><code>metadata</code> <span class="c-com">JSON</span></dt>
+<dd>Any metadata attached to the checkpoint. This can be the source step, a writes summary, and so on.</dd>
+<dt><code>parent_config</code> <span class="c-com">JSON</span></dt>
+<dd>The runnable config of the parent checkpoint.</dd>
+<dt><code>created_at</code> <span class="c-com">TIMESTAMP</span></dt>
+<dd>The server sets this automatically in UTC on each <code>PUT</code>. You do <strong>not</strong> supply it in the <code>VALUES</code> list. It sets the newest-first order used by <code>GET</code> and <code>LIST</code>.</dd>
+</dl>
+
+<p><code>CHECKPOINT PUT</code> inserts exactly one row. The seven values in the <code>VALUES</code> list match the first seven columns above by position. The server fills in the eighth column, <code>created_at</code>. Each value slot is either a string literal or the keyword <code>NULL</code>.</p>
+
+<p><code>CHECKPOINT GET</code> returns the single most recent checkpoint for the given <code>THREAD</code>. The rows are ordered by <code>created_at</code> descending with <code>LIMIT 1</code>. When you supply <code>AT <var>checkpoint_id</var></code>, it instead returns the one row whose <code>checkpoint_id</code> matches exactly. This lets you time-travel to a specific point.</p>
+
+<p><code>CHECKPOINT LIST</code> returns the full checkpoint history for a <code>THREAD</code>, newest first. An optional <code>LIMIT <var>count</var></code> caps the number of rows returned.</p>
+
+<p>If the named store does not exist, all four <code>CHECKPOINT</code> data statements raise an error. The SQLSTATE is <code>42704</code>, which means <em>undefined object</em>.</p>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt><code>IF NOT EXISTS</code> / <code>IF EXISTS</code></dt>
+<dd>On <code>CREATE CHECKPOINT STORE</code>, <code>IF NOT EXISTS</code> hides the "already exists" error. That error is SQLSTATE <code>42710</code>. It leaves the existing store as it is. On <code>DROP CHECKPOINT STORE</code>, <code>IF EXISTS</code> hides the "does not exist" error. That error is SQLSTATE <code>42704</code>.</dd>
+
+<dt><var>name</var></dt>
+<dd>The store name. It must be a bare identifier. The lexer accepts the pattern <code>[A-Za-z][A-Za-z0-9_]*</code>, so it cannot start with an underscore. The backing table is created as <code>ck_<var>name</var></code> in the current schema.</dd>
+
+<dt><code>WITH ( RETENTION = <var>interval</var> )</code></dt>
+<dd>An optional retention hint kept on the store. You give it as a string literal such as <code>'30 days'</code>. The value is stored as-is in the catalog. The <code>=</code> sign is the comparison operator that the grammar accepts.</dd>
+
+<dt><code>CASCADE</code> <span class="c-com">(DROP)</span></dt>
+<dd>Parsed and accepted on <code>DROP CHECKPOINT STORE</code>. EvolutionDB always drops the backing <code>ck_<var>name</var></code> table along with the store. This happens whether or not you write <code>CASCADE</code>. The store is the only object that points to that table.</dd>
+
+<dt><code>PUT</code> / <code>PUT WRITES</code></dt>
+<dd>Both insert one checkpoint row. <code>WRITES</code> is an alias kept to match the LangGraph <code>put_writes</code> API. In this version it does <strong>not</strong> change behavior. The row is written the same way with either form.</dd>
+
+<dt><code>INTO <var>name</var> VALUES ( … )</code> <span class="c-com">(PUT)</span></dt>
+<dd>The target store and the seven positional values. The values are <var>thread_id</var>, <var>checkpoint_ns</var>, <var>checkpoint_id</var>, <var>parent_id</var>, <var>values</var>, <var>metadata</var>, and <var>parent_config</var>. Each slot is a string literal or <code>NULL</code>. The grammar requires all seven slots.</dd>
+
+<dt><code>FROM <var>name</var></code> <span class="c-com">(GET / LIST)</span></dt>
+<dd>The store to read from.</dd>
+
+<dt><code>THREAD <var>thread_id</var></code></dt>
+<dd>A string literal that names the thread to read. This becomes the <code>WHERE thread_id = '<var>thread_id</var>'</code> filter.</dd>
+
+<dt><code>AT <var>checkpoint_id</var></code> <span class="c-com">(GET)</span></dt>
+<dd>A string literal. It narrows the result to the single checkpoint with that <code>checkpoint_id</code> instead of the latest one.</dd>
+
+<dt><code>LIMIT <var>count</var></code> <span class="c-com">(LIST)</span></dt>
+<dd>An integer. Caps the number of history rows returned.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>Create a checkpoint store with a retention hint.</p>
+<pre><code><span class="c-key">CREATE CHECKPOINT STORE</span> agent_runs
+    <span class="c-key">WITH</span> (<span class="c-key">RETENTION</span> = <span class="c-str">'30 days'</span>);</code></pre>
+
+<p>Create one in an idempotent way. Running it again does no harm.</p>
+<pre><code><span class="c-key">CREATE CHECKPOINT STORE IF NOT EXISTS</span> agent_runs;</code></pre>
+
+<p>Write a checkpoint. The seven values are <code>thread_id</code>, <code>checkpoint_ns</code>, <code>checkpoint_id</code>, <code>parent_id</code>, <code>values</code>, <code>metadata</code>, and <code>parent_config</code>. The server fills in <code>created_at</code>.</p>
+<pre><code><span class="c-key">CHECKPOINT PUT INTO</span> agent_runs <span class="c-key">VALUES</span> (
+    <span class="c-str">'thread-42'</span>,                       <span class="c-com">-- thread_id</span>
+    <span class="c-str">''</span>,                                <span class="c-com">-- checkpoint_ns</span>
+    <span class="c-str">'ckpt-0001'</span>,                       <span class="c-com">-- checkpoint_id</span>
+    <span class="c-key">NULL</span>,                              <span class="c-com">-- parent_id (root)</span>
+    <span class="c-str">'{"messages":["hi"]}'</span>,             <span class="c-com">-- values (JSON)</span>
+    <span class="c-str">'{"step":1}'</span>,                      <span class="c-com">-- metadata (JSON)</span>
+    <span class="c-key">NULL</span>                               <span class="c-com">-- parent_config</span>
+);</code></pre>
+
+<p>Write a follow-up checkpoint that comes from the first one. This uses the cosmetic <code>WRITES</code> alias.</p>
+<pre><code><span class="c-key">CHECKPOINT PUT WRITES INTO</span> agent_runs <span class="c-key">VALUES</span> (
+    <span class="c-str">'thread-42'</span>, <span class="c-str">''</span>, <span class="c-str">'ckpt-0002'</span>, <span class="c-str">'ckpt-0001'</span>,
+    <span class="c-str">'{"messages":["hi","there"]}'</span>, <span class="c-str">'{"step":2}'</span>, <span class="c-key">NULL</span>);</code></pre>
+
+<p>Fetch the latest checkpoint for a thread.</p>
+<pre><code><span class="c-key">CHECKPOINT GET FROM</span> agent_runs <span class="c-key">THREAD</span> <span class="c-str">'thread-42'</span>;</code></pre>
+
+<p>Time-travel to a specific checkpoint id.</p>
+<pre><code><span class="c-key">CHECKPOINT GET FROM</span> agent_runs <span class="c-key">THREAD</span> <span class="c-str">'thread-42'</span> <span class="c-key">AT</span> <span class="c-str">'ckpt-0001'</span>;</code></pre>
+
+<p>List a thread's history, newest first, capped at five rows.</p>
+<pre><code><span class="c-key">CHECKPOINT LIST FROM</span> agent_runs <span class="c-key">THREAD</span> <span class="c-str">'thread-42'</span> <span class="c-key">LIMIT</span> <span class="c-num">5</span>;</code></pre>
+
+<p>Every store is just a table named <code>ck_<var>name</var></code>. So you can reach the same data with ordinary SQL.</p>
+<pre><code><span class="c-key">SELECT</span> * <span class="c-key">FROM</span> ck_agent_runs
+    <span class="c-key">WHERE</span> thread_id = <span class="c-str">'thread-42'</span>
+    <span class="c-key">ORDER BY</span> created_at <span class="c-key">DESC</span>;</code></pre>
+
+<p>Remove the store and its backing table.</p>
+<pre><code><span class="c-key">DROP CHECKPOINT STORE IF EXISTS</span> agent_runs <span class="c-key">CASCADE</span>;</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<ul>
+<li><strong>Not in the SQL standard.</strong> <code>CHECKPOINT</code>, <code>CREATE CHECKPOINT STORE</code>, and <code>DROP CHECKPOINT STORE</code> are EvolutionDB extensions. There is no match for them in the SQL standard.</li>
+<li><strong>Different from PostgreSQL's <code>CHECKPOINT</code>.</strong> PostgreSQL's <code>CHECKPOINT</code> forces a WAL checkpoint and takes no operands. EvolutionDB's <code>CHECKPOINT</code> is a data-access verb for checkpoint stores. It uses <code>PUT</code>, <code>PUT WRITES</code>, <code>GET</code>, and <code>LIST</code>. It has nothing to do with WAL flushing. EvolutionDB does not offer a bare <code>CHECKPOINT;</code> WAL-flush statement.</li>
+<li><strong>Based on the LangGraph <code>BaseCheckpointSaver</code> contract.</strong> The fixed eight-column schema mirrors the LangGraph checkpoint tuple. The columns are <code>thread_id</code>, <code>checkpoint_ns</code>, <code>checkpoint_id</code>, <code>parent_id</code>, values, metadata, parent config, and a server-set timestamp. This is a vendor convenience layer. It is not a standard interface.</li>
+<li><strong><code>WRITES</code> is accepted but cosmetic in this version.</strong> <code>CHECKPOINT PUT</code> and <code>CHECKPOINT PUT WRITES</code> behave the same way. The application layer handles any per-write meaning.</li>
+<li><strong><code>CASCADE</code> is parsed but the drop always cascades.</strong> It always drops the backing <code>ck_<var>name</var></code> table whether or not you give the keyword.</li>
+<li><strong>The <code>VALUES</code> list is fixed at seven positional slots.</strong> Unlike <code>INSERT</code>, you cannot supply a column list, reorder columns, or skip a slot. Pass <code>NULL</code> for unused fields. The <code>created_at</code> column is reserved for the server.</li>
+<li>The store name and backing-table name are not schema-qualified in these statements. Objects are created in the current schema and resolved against it.</li>
+</ul>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/insert/">INSERT</a></li>
+<li><a href="/3.0/ref/select/">SELECT</a></li>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
+<li><a href="/3.0/ref/drop-table/">DROP TABLE</a></li>
+</ul>
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

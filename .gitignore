@@ -33,10 +33,6 @@ dist/
 Debug/
 Release/
 
-# MkDocs site build + venv
-site/
-.mkdocs-venv/
-
 # Python packaging artifacts (mcp-server-evosql, python-evosql-memory, etc.)
 client/**/dist/
 client/**/build/
@@ -82,7 +78,6 @@ tests/*
 !tests/framework_compat/**
 .env
 .env.local
-wiki/
 *.claude
 wal.*
 *.wal

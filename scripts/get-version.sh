@@ -1,7 +1,7 @@
 #!/bin/sh
 # get-version.sh — print the EvolutionDB engine version as MAJOR.MINOR.PATCH.
 #
-# `evolution/db/version.h` is the single source of truth for the user-visible
+# `src/include/version.h` is the single source of truth for the user-visible
 # version. Installer workflows, build.sh helpers, AUR PKGBUILDs, and the
 # distribution.xml manifest all read it through this helper instead of
 # hard-coding their own string. When you bump the version, edit version.h
@@ -15,7 +15,7 @@
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-HDR="$ROOT/evolution/db/version.h"
+HDR="$ROOT/src/include/version.h"
 
 [ -f "$HDR" ] || { echo "missing $HDR" >&2; exit 1; }
 

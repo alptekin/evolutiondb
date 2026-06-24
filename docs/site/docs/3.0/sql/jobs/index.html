@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>19. Scheduled Jobs | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>19. Scheduled Jobs</h1>
+<p class="lede">EvolutionDB keeps named, cron-scheduled SQL statements in the system catalog. It checks each five-field cron pattern against the clock once per background tick.</p>
+
+<p>A <em>scheduled job</em> is a saved catalog object. It links a name to a cron expression and a single SQL statement. You create jobs with <code>CREATE JOB</code>. You pause or resume them with <code>ALTER JOB</code>. You remove them with <code>DROP JOB</code>. You list them with <code>SHOW JOBS</code>. The same background worker thread that runs auto-RECLAIM also checks the jobs. There is no separate scheduler daemon or outside process to set up.</p>
+
+<div class="callout">
+<p><strong>Maturity (3.0).</strong> The DDL commands, catalog storage, cron matching, the <code>ENABLE</code>/<code>DISABLE</code> flag, and <code>SHOW JOBS</code> are all finished. When a job fires, the server records the match. It stamps <code>last_run_unix</code> and writes a line to the server log. It <strong>does not yet run the stored SQL</strong>. Running the SQL is planned for a later release. See <a href="#firing">§19.6</a> for the exact current behavior.</p>
+</div>
+
+<h2 id="overview">19.1. Overview</h2>
+<p>Each job holds exactly five pieces of state. They all live in the <code>CAT_SYS_SCHEDULED_JOBS</code> system catalog. There is one B+ tree row per job.</p>
+<dl class="params">
+<dt><code>name</code></dt>
+<dd>The job name. Job names are global. They are not schema-qualified, and they must be unique. The maximum length is 127 characters.</dd>
+<dt><code>schedule</code> (cron expression)</dt>
+<dd>A five-field, space-separated cron pattern. It is stored as a plain string. The maximum length is 63 characters. See <a href="#cron">§19.5</a>.</dd>
+<dt><code>sql</code></dt>
+<dd>The single SQL statement the job will run. It is stored exactly as given. The maximum length is 1023 characters. Any single or double quotes around it are removed when it is stored.</dd>
+<dt><code>enabled</code></dt>
+<dd>A boolean. New jobs are <code>enabled</code>. <code>ALTER JOB … DISABLE</code> pauses the job. <code>ALTER JOB … ENABLE</code> starts it again.</dd>
+<dt><code>last_run_unix</code></dt>
+<dd>A 64-bit Unix timestamp. It marks the most recent tick where the job's pattern matched. It is <code>0</code> if the job has never matched. It is used for introspection. It also stops the same minute from matching twice.</dd>
+</dl>
+
+<div class="callout">
+<p><strong>Not a PostgreSQL feature.</strong> Core PostgreSQL has no <code>CREATE JOB</code> statement and no built-in scheduler. Recurring tasks are usually handled by the outside <code>pg_cron</code> extension or by the host's <code>cron</code> or systemd. The SQL standard does not define scheduled jobs at all. EvolutionDB's <code>CREATE JOB … ON SCHEDULE … DO</code> syntax looks most like MySQL's <code>CREATE EVENT</code>. The behavior, the cron dialect, and the limits below are all specific to EvolutionDB.</p>
+</div>
+
+<div class="callout">
+<p><strong>Not the same as the agent's daily brief.</strong> <code>CREATE JOB</code> schedules <em>in-database</em> SQL inside the engine catalog. Application-level recurring tasks belong somewhere else. EvolutionAgent's morning <em>daily brief</em>, for example, is not a SQL job and has no <code>CREATE JOB</code> behind it. It runs in the MCP server's own background scheduler (a job named <code>brief_delivery</code>, by default daily at 07:30 UTC), which collects and renders the brief and queues it to the user. It is opt-in and self-hosted. For how that scheduler works and how to enable it, see the <a href="https://developer.evolutiondb.org/platform/agent/">EvolutionAgent developer docs</a>.</p>
+</div>
+
+<h2 id="create">19.2. Creating a job</h2>
+<p>See the <a href="/3.0/ref/create-job/">CREATE JOB</a> reference page for the full command synopsis.</p>
+<div class="synopsis">
+<pre class="sig"><code><span class="c-key">CREATE JOB</span> [ <span class="c-key">IF EXISTS</span> ] <em>name</em>
+    <span class="c-key">ON SCHEDULE</span> <span class="c-str">'&lt;min&gt; &lt;hour&gt; &lt;dom&gt; &lt;mon&gt; &lt;dow&gt;'</span>
+    <span class="c-key">DO</span> <span class="c-str">'&lt;sql&gt;'</span>;</code></pre>
+</div>
+
+<p>Both the cron expression and the SQL body come in as string literals. The engine removes the quotes around them before it stores them. A valid statement runs four checks in order. The name must be present. The cron expression must be valid. See <a href="#cron">§19.5</a>. The <code>DO</code> body must not be empty. The name must not already be in use.</p>
+
+<pre><code><span class="c-com">-- Fire every day at 03:00 (UTC - see the note on time zones below)</span>
+<span class="c-key">CREATE JOB</span> nightly_rollup
+    <span class="c-key">ON SCHEDULE</span> <span class="c-str">'0 3 * * *'</span>
+    <span class="c-key">DO</span> <span class="c-str">'INSERT INTO daily_totals SELECT today(), count(*) FROM orders'</span>;
+
+<span class="c-com">-- Fire at the top of every hour</span>
+<span class="c-key">CREATE JOB</span> hourly_ping
+    <span class="c-key">ON SCHEDULE</span> <span class="c-str">'0 * * * *'</span>
+    <span class="c-key">DO</span> <span class="c-str">'UPDATE heartbeat SET ts = now()'</span>;</code></pre>
+
+<h3 id="if-exists">19.2.1. The IF EXISTS guard</h3>
+<p>The optional <code>IF EXISTS</code> clause makes the create safe to repeat. If a job with that name already exists, the statement does nothing and still succeeds. It does not raise an error. The keyword here is <code>IF EXISTS</code>, not <code>IF NOT EXISTS</code>. It guards against a name that is already there.</p>
+<pre><code><span class="c-key">CREATE JOB IF EXISTS</span> nightly_rollup
+    <span class="c-key">ON SCHEDULE</span> <span class="c-str">'0 3 * * *'</span>
+    <span class="c-key">DO</span> <span class="c-str">'INSERT INTO daily_totals SELECT today(), count(*) FROM orders'</span>;
+<span class="c-com">-- second run with the same name: no error, no change</span></code></pre>
+<p>Without the guard, creating a job with a name that is already taken raises SQLSTATE <code>42710</code> (<em>duplicate object</em>).</p>
+
+<h2 id="alter">19.3. Pausing and resuming a job</h2>
+<p><code>ALTER JOB</code> flips the <code>enabled</code> flag. There is no way to change a job's cron expression or SQL body in place. To change those, drop the job and create it again.</p>
+<div class="synopsis">
+<pre class="sig"><code><span class="c-key">ALTER JOB</span> <em>name</em> { <span class="c-key">ENABLE</span> | <span class="c-key">DISABLE</span> };</code></pre>
+</div>
+<pre><code><span class="c-key">ALTER JOB</span> hourly_ping <span class="c-key">DISABLE</span>;   <span class="c-com">-- pause: skipped on every tick</span>
+<span class="c-key">ALTER JOB</span> hourly_ping <span class="c-key">ENABLE</span>;    <span class="c-com">-- resume</span></code></pre>
+<p>Altering a job that does not exist raises SQLSTATE <code>42704</code> (<em>undefined object</em>). A disabled job stays in the catalog. It still shows up in <code>SHOW JOBS</code>. The scheduler skips it when it walks the job list.</p>
+
+<h2 id="drop">19.4. Dropping a job</h2>
+<div class="synopsis">
+<pre class="sig"><code><span class="c-key">DROP JOB</span> [ <span class="c-key">IF EXISTS</span> ] <em>name</em>;</code></pre>
+</div>
+<pre><code><span class="c-key">DROP JOB</span> hourly_ping;
+<span class="c-key">DROP JOB IF EXISTS</span> maybe_gone;   <span class="c-com">-- no error if it isn't there</span></code></pre>
+<p>Dropping a job that does not exist raises SQLSTATE <code>42704</code>. If you add <code>IF EXISTS</code>, the statement does nothing instead.</p>
+
+<h2 id="cron">19.5. Cron expression dialect</h2>
+<p>EvolutionDB 3.0 uses a very small cron dialect on purpose. An expression has exactly five fields. They are separated by spaces or tabs.</p>
+
+<table>
+<thead><tr><th>Position</th><th>Field</th><th>Allowed range</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>minute</td><td><code>0</code>–<code>59</code></td><td></td></tr>
+<tr><td>2</td><td>hour</td><td><code>0</code>–<code>23</code></td><td></td></tr>
+<tr><td>3</td><td>day of month</td><td><code>1</code>–<code>31</code></td><td></td></tr>
+<tr><td>4</td><td>month</td><td><code>1</code>–<code>12</code></td><td></td></tr>
+<tr><td>5</td><td>day of week</td><td><code>0</code>–<code>7</code></td><td>both <code>0</code> and <code>7</code> mean Sunday, as in POSIX</td></tr>
+</tbody>
+</table>
+
+<p>Each field has one of exactly two forms.</p>
+<dl class="params">
+<dt><code>*</code></dt>
+<dd>A wildcard. It matches every value of that field.</dd>
+<dt>a single non-negative integer</dt>
+<dd>A fixed number. It matches only when the matching clock field is equal to it.</dd>
+</dl>
+
+<p>That is the whole grammar. The forms below are common in standard cron. They are <strong>not</strong> supported in 3.0. They cause the expression to be rejected.</p>
+<ul>
+<li>Ranges, e.g. <code>1-5</code></li>
+<li>Comma lists, e.g. <code>1,15,30</code></li>
+<li>Step values, e.g. <code>*/5</code></li>
+<li>Named months or weekdays, e.g. <code>JAN</code>, <code>MON</code></li>
+</ul>
+
+<p>This handles the common cases. It covers every minute, every hour, and a fixed time each day. It does this without a full cron parser. The catalog stores the whole string as written. A later release can add a richer evaluator with no data migration.</p>
+
+<pre><code><span class="c-com">-- Accepted</span>
+<span class="c-str">'* * * * *'</span>      <span class="c-com">-- every minute</span>
+<span class="c-str">'30 * * * *'</span>     <span class="c-com">-- at minute 30 of every hour</span>
+<span class="c-str">'0 0 1 * *'</span>      <span class="c-com">-- midnight on the 1st of every month</span>
+<span class="c-str">'0 9 * * 0'</span>      <span class="c-com">-- 09:00 on Sundays</span>
+
+<span class="c-com">-- Rejected → SQLSTATE 22023</span>
+<span class="c-str">'*/5 * * * *'</span>    <span class="c-com">-- step values unsupported</span>
+<span class="c-str">'0 9-17 * * *'</span>   <span class="c-com">-- ranges unsupported</span>
+<span class="c-str">'0 0 * * MON'</span>    <span class="c-com">-- named weekdays unsupported</span>
+<span class="c-str">'0 0 * *'</span>       <span class="c-com">-- only four fields</span></code></pre>
+
+<div class="callout">
+<p><strong>Time zone is UTC.</strong> The cron pattern is matched against UTC. It is not matched against the server's local time. A job set to <code>0 3 * * *</code> fires when the UTC clock reads 03:00. The host time zone does not matter. Standard cron matches local time. EvolutionDB does not. Add any offset right into the hour field.</p>
+</div>
+
+<h2 id="firing">19.6. How jobs are evaluated and fired</h2>
+<p>There is no separate scheduler process. The background worker that runs auto-RECLAIM also calls the scheduler on each tick. The tick interval is 30 seconds by default. You can lower it to as little as 1 second with the <code>EVOSQL_AUTO_RECLAIM_INTERVAL_SEC</code> environment variable. The cron dialect's smallest step is one minute. So ticks shorter than a minute do not cause extra firings.</p>
+
+<p>On each tick the scheduler walks every job. It fires a job only when all of these are true.</p>
+<ol>
+<li>the job is <code>enabled</code>;</li>
+<li>its cron pattern matches the current UTC minute; and</li>
+<li>its <code>last_run_unix</code> is older than the start of the current minute. This stops a job from firing twice on two ticks inside the same minute.</li>
+</ol>
+
+<p>When a job fires, the scheduler stamps <code>last_run_unix</code> with the start of the current minute. It saves this to the catalog. It also writes a line to the server log to note the match. <strong>In 3.0 it does not run the stored SQL.</strong> The hooks to send the job's SQL through the engine are in place. Running any SQL from the background thread is blocked until that path is safe. That work is planned for a later release.</p>
+
+<div class="callout">
+<p><strong>What this means in practice.</strong> Today you can create, save, enable, disable, and watch scheduled jobs. You can confirm a schedule "ticked" by watching <code>last_run_unix</code> move forward in <code>SHOW JOBS</code>. Do not rely on a job's <code>DO</code> statement to change data yet. The statement is saved but not run until SQL execution is wired up.</p>
+</div>
+
+<h2 id="show">19.7. Inspecting jobs</h2>
+<p><code>SHOW JOBS</code> returns one row per job. It lists enabled and disabled jobs alike. See the <a href="/3.0/ref/show/">SHOW</a> reference page.</p>
+<pre><code><span class="c-key">SHOW JOBS</span>;</code></pre>
+<p>The result set has five columns.</p>
+<table>
+<thead><tr><th>Column</th><th>Type</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>name</code></td><td>text</td><td>Job name</td></tr>
+<tr><td><code>schedule</code></td><td>text</td><td>The stored cron expression</td></tr>
+<tr><td><code>sql</code></td><td>text</td><td>The configured <code>DO</code> statement</td></tr>
+<tr><td><code>enabled</code></td><td>boolean</td><td><code>true</code> if active, <code>false</code> if disabled</td></tr>
+<tr><td><code>last_run_unix</code></td><td>bigint</td><td>Unix timestamp of the most recent match, or <code>0</code> if never matched</td></tr>
+</tbody>
+</table>
+<p>A non-zero <code>last_run_unix</code> that moves forward over time shows the scheduler is matching the pattern. This is the best way to check that a schedule fires.</p>
+
+<h2 id="errors">19.8. Error codes</h2>
+<p>Job statements report failures through SQLSTATE.</p>
+<table>
+<thead><tr><th>SQLSTATE</th><th>Condition</th><th>Raised by</th></tr></thead>
+<tbody>
+<tr><td><code>42601</code></td><td>Syntax error. The job name is missing, or the <code>DO</code> body is empty</td><td><code>CREATE JOB</code></td></tr>
+<tr><td><code>22023</code></td><td>Invalid cron expression (wrong field count, unsupported syntax, or out-of-range value)</td><td><code>CREATE JOB</code></td></tr>
+<tr><td><code>42710</code></td><td>A job with that name already exists</td><td><code>CREATE JOB</code> (without <code>IF EXISTS</code>)</td></tr>
+<tr><td><code>42704</code></td><td>The named job does not exist</td><td><code>DROP JOB</code> / <code>ALTER JOB</code> (without <code>IF EXISTS</code>)</td></tr>
+</tbody>
+</table>
+
+<div class="callout">
+<p><strong>Notes and limitations (3.0).</strong></p>
+<ul>
+<li>A job's <code>DO</code> SQL is <strong>recorded but not run</strong>. Only the match is logged, and <code>last_run_unix</code> is stamped. Treat jobs as schedulable metadata until execution lands.</li>
+<li>Cron matching uses <strong>UTC</strong>, not local time.</li>
+<li>Each cron field allows only <code>*</code> or a single integer. There are no ranges, lists, steps, or names.</li>
+<li>Job names are <strong>global</strong>. They are not schema-qualified, and they must be unique across the server.</li>
+<li>There is no <code>ALTER JOB</code> form to rewrite the schedule or the SQL. Drop the job and create it again to change them.</li>
+<li>The scheduler walks at most 64 jobs per tick.</li>
+<li>Evaluation runs on the auto-RECLAIM worker thread. If that worker is not started, no job is ever evaluated.</li>
+</ul>
+</div>
+
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

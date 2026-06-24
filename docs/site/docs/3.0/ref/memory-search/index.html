@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>MEMORY SEARCH | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>MEMORY SEARCH</h1>
+<p class="lede">MEMORY SEARCH sorts the rows of a memory store by how close they are to a query embedding. It then returns the closest matches.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">MEMORY SEARCH</span> <span class="c-com">store_name</span> <span class="c-key">USING VECTOR</span> '<span class="c-com">query</span>' <span class="opt">[ <span class="c-key">LIMIT</span> count ]</span></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>MEMORY SEARCH</code> runs a similarity search over a memory store. You create the store with <a href="/3.0/ref/create-memory-store/">CREATE MEMORY STORE</a>. The command compares the <code>query</code> embedding you give against the <code>embedding</code> column of every row in the store's backing table. It computes a distance <code>score</code> for each row. The store's distance metric decides how the score is computed. The rows come back sorted from nearest to farthest. The smallest score is the nearest row.</p>
+<p>Each result row has four columns.</p>
+<dl class="params">
+<dt>mem_namespace</dt><dd>The namespace the entry was stored under.</dd>
+<dt>mem_key</dt><dd>The key inside that namespace.</dd>
+<dt>mem_value</dt><dd>The stored JSON value.</dd>
+<dt>score</dt><dd>The distance between the row's stored embedding and the query embedding. The metric you chose at <code>CREATE MEMORY STORE</code> time computes it. Results are sorted by this column from low to high. The lowest score is the closest match.</dd>
+</dl>
+<p>The distance function is set when you create the store. It comes from the store's <code>distance</code> option. You cannot change it for a single query. The options work like this.</p>
+<dl class="params">
+<dt>cosine</dt><dd>Cosine distance. This is the default for any store. It is used when <code>distance</code> was <code>'cosine'</code> or was left out.</dd>
+<dt>l2</dt><dd>Euclidean (L2) distance. It is used when <code>distance</code> was <code>'l2'</code>.</dd>
+<dt>inner / ip</dt><dd>Inner-product distance. It is used when <code>distance</code> was <code>'inner'</code> or <code>'ip'</code>.</dd>
+<dt>l1</dt><dd>Manhattan (L1) distance. It is used when <code>distance</code> was <code>'l1'</code>.</dd>
+</dl>
+<p>Inside the engine, the search runs as a SELECT over the backing table. So the same rules apply to the search results as to the table. This includes row-level security policies, MVCC visibility rules, and other engine-level guarantees.</p>
+<div class="callout">
+<p>The memory store must have been created with a non-zero <code>embedding_dim</code>. A store made without an embedding column is a plain JSON key/value table. It cannot do semantic search. Searching such a store raises an error with <code>SQLSTATE 42P01</code>. Searching a store that does not exist raises <code>SQLSTATE 42704</code>.</p>
+</div>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt>store_name</dt>
+<dd>The name of the memory store to search. The store must exist. It must have been created with an embedding dimension greater than zero.</dd>
+<dt>USING VECTOR '<code>query</code>'</dt>
+<dd>The query embedding. You give it as a string literal. It is read as a vector literal. A vector literal is a comma-separated list of floats inside brackets, for example <code>'[0.1, 0.2, 0.3]'</code>. It is compared against each row's stored <code>embedding</code>. This clause is required. There is no search form based on a key or text.</dd>
+<dt>LIMIT <code>count</code></dt>
+<dd>Optional. It limits how many result rows come back. When you leave it out, the search returns the 10 closest matches. <code>count</code> is an integer literal.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>Return the 10 closest entries to a query embedding. This uses the default limit.</p>
+<pre><code><span class="c-key">MEMORY SEARCH</span> agent_mem <span class="c-key">USING VECTOR</span> <span class="c-str">'[0.12, 0.04, 0.91, 0.33]'</span>;</code></pre>
+
+<p>Return only the single best match.</p>
+<pre><code><span class="c-key">MEMORY SEARCH</span> agent_mem <span class="c-key">USING VECTOR</span> <span class="c-str">'[0.12, 0.04, 0.91, 0.33]'</span> <span class="c-key">LIMIT</span> 1;</code></pre>
+
+<p>This example gets the top five nearest matches. Each row includes the computed distance in the <code>score</code> column.</p>
+<pre><code><span class="c-com">-- store created with: CREATE MEMORY STORE notes</span>
+<span class="c-com">--   WITH (embedding_dim = 4, distance = 'l2')</span>
+<span class="c-key">MEMORY SEARCH</span> notes <span class="c-key">USING VECTOR</span> <span class="c-str">'[1.0, 0.0, 0.0, 0.0]'</span> <span class="c-key">LIMIT</span> 5;
+<span class="c-com">-- columns: mem_namespace | mem_key | mem_value | score</span></code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p><code>MEMORY SEARCH</code> is an EvolutionDB extension. There is no matching statement in the SQL standard. It is not part of PostgreSQL's grammar. It works much like a nearest-neighbour ORDER BY query against a pgvector column in PostgreSQL. One such query is <code>ORDER BY embedding &lt;-&gt; '[...]' LIMIT k</code>. But it is one dedicated command, not a general SELECT operator.</p>
+<p>These behaviours are specific to EvolutionDB.</p>
+<ul>
+<li>The distance metric is set on the store when you create it. You cannot pick it per query. PostgreSQL and pgvector let you pick an operator per query, such as <code>&lt;-&gt;</code>, <code>&lt;#&gt;</code>, or <code>&lt;=&gt;</code>.</li>
+<li>Results are always ordered by <code>score</code> from low to high. There is no user-supplied <code>ORDER BY</code> clause in this command.</li>
+<li>When you leave out <code>LIMIT</code>, the command uses a built-in default of 10 rows. It does not return all rows.</li>
+<li>The returned columns are fixed. They are <code>mem_namespace</code>, <code>mem_key</code>, <code>mem_value</code>, and <code>score</code>. There is no select-list in the grammar.</li>
+</ul>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/create-memory-store/">CREATE MEMORY STORE</a></li>
+<li><a href="/3.0/ref/memory-put/">MEMORY PUT</a></li>
+<li><a href="/3.0/ref/memory-get/">MEMORY GET</a></li>
+<li><a href="/3.0/ref/memory-delete/">MEMORY DELETE</a></li>
+<li><a href="/3.0/ref/memory-list-namespaces/">MEMORY LIST NAMESPACES</a></li>
+<li><a href="/3.0/ref/drop-memory-store/">DROP MEMORY STORE</a></li>
+<li><a href="/3.0/ref/select/">SELECT</a></li>
+</ul>
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

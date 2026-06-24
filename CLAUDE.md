@@ -76,7 +76,8 @@ src/bin/tools/      diagnostics (catdiag, catrepair, rowdiag, cattorture)
 test/               python wire-protocol tests
 infra/{docker,compose,helm}/   container + k8s deployment
 packaging/          OS installers (macos/linux/windows/aur)
-docs/{site,src}/    built reference manual/wiki + mkdocs source
+docs/site/{docs,wiki}/  two static sites: docs.evolutiondb.org (SQL manual) + wiki.evolutiondb.org (engine internals)
+docs/tools/         site generator (gen_docs.py), templates, style guide; version read from src/include/version.h
 ```
 
 The agent, MCP memory server, connectors, language SDKs, and the `evosql-cli`

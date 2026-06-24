@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Unified Storage Overview | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>Unified Storage Overview</h1>
+<p class="lede">EvolutionDB keeps all of its data in one binary file called <code>evosql.db</code>. This single file holds databases, schemas, tables, indexes, users, grants, and the system catalog. The file is split into fixed-size 4KB pages. Every disk read and write goes through a Clock Sweep buffer pool. All structural links inside the file are kept with B+ tree indexes and slotted pages.</p>
+
+<h2 id="architecture">Architecture Overview</h2>
+<p>All data lives in one file made of 4KB pages. Page 0 holds the file header. The rest of the file holds data pages, B+ tree nodes, and free pages.</p>
+<pre><code>evosql.db (single binary file, 4KB pages)
+ Page 0: FileHeader (magic, free list head, catalog roots, ID counters)
+ Page 1..N: Data pages, B+ tree nodes, free pages</code></pre>
+<p>The storage engine is built in layers. Each layer depends only on the layer below it.</p>
+<pre><code>┌──────────────────────────────────────────────────┐
+│          DML Modules (Insert / Select / ...)      │
+├──────────────────────────────────────────────────┤
+│  Table API         │  System Catalog              │
+│  tapi_heap_insert  │  cat_create_table            │
+│  tapi_scan_begin   │  cat_find_columns            │
+│  tapi_build_pk_key │  cat_resolve_table           │
+├──────────────────────────────────────────────────┤
+│          B+ Tree (bt2_insert / search / cursor)   │
+├──────────────────────────────────────────────────┤
+│          Slotted Pages (slot_insert / read)        │
+├──────────────────────────────────────────────────┤
+│          Page Manager (pgm_alloc / read / write)   │
+├──────────────────────────────────────────────────┤
+│          Buffer Pool (bp_read / bp_write)           │
+└──────────────────────────────────────────────────┘
+               ┌────────────────┐
+               │   evosql.db    │
+               └────────────────┘</code></pre>
+
+<h2 id="page-layout">Page Layout</h2>
+<p>Every page is exactly <code>EVO_PAGE_SIZE</code> bytes, which is 4096. The first 16 bytes of every page hold a common header.</p>
+<pre><code><span class="c-key">typedef struct</span> {
+    <span class="c-key">uint8_t</span>  page_type;    <span class="c-com">/* PAGE_FREE=0, PAGE_DATA=1, PAGE_BTREE_INT=2,
+                              PAGE_BTREE_LEAF=3, PAGE_OVERFLOW=4 */</span>
+    <span class="c-key">uint8_t</span>  flags;        <span class="c-com">/* reserved */</span>
+    <span class="c-key">uint16_t</span> free_space;   <span class="c-com">/* bytes of free space on this page */</span>
+    <span class="c-key">uint32_t</span> page_id;      <span class="c-com">/* self-identifying page number */</span>
+    <span class="c-key">uint32_t</span> next_page;    <span class="c-com">/* free list chain or leaf chain */</span>
+    <span class="c-key">uint32_t</span> prev_page;    <span class="c-com">/* B+ tree leaf backward pointer */</span>
+} <span class="c-fn">PageHeader</span>;              <span class="c-com">/* 16 bytes */</span></code></pre>
+<p>Usable space per page is <code>4096 - 16 = 4080 bytes</code>.</p>
+
+<h3 id="page-0-file-header">Page 0 File Header</h3>
+<p>Page 0 is reserved for the <code>FileHeader</code>. It is never freed.</p>
+<table>
+<thead><tr><th>Field</th><th>Size</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td><code>magic</code></td><td>4B</td><td><code>0x45564F44</code> ("EVOD")</td></tr>
+<tr><td><code>version</code></td><td>2B</td><td>File format version (currently 1)</td></tr>
+<tr><td><code>page_size</code></td><td>2B</td><td>Always 4096</td></tr>
+<tr><td><code>total_pages</code></td><td>4B</td><td>Total pages in file</td></tr>
+<tr><td><code>free_list_head</code></td><td>4B</td><td>First free page (0 = none)</td></tr>
+<tr><td><code>catalog_roots[16]</code></td><td>64B</td><td>Root page numbers for system catalog B+ trees</td></tr>
+<tr><td><code>next_table_id</code></td><td>4B</td><td>Auto-increment counter for table IDs</td></tr>
+<tr><td><code>next_schema_id</code></td><td>4B</td><td>Auto-increment counter for schema IDs</td></tr>
+<tr><td><code>next_db_id</code></td><td>4B</td><td>Auto-increment counter for database IDs</td></tr>
+<tr><td><code>reserved</code></td><td>4004B</td><td>Pad to full page</td></tr>
+</tbody>
+</table>
+
+<h3 id="free-list">Free List</h3>
+<p>Free pages are chained through the <code>next_page</code> field in their <code>PageHeader</code>. When <code>pgm_alloc_page()</code> is called, the page manager does one of two things.</p>
+<ol>
+<li>If the free list is not empty, it pops the head page and initializes it with the requested type.</li>
+<li>If the free list is empty, it grows the file by 50% of the current size, with a minimum of 16 pages. It chains the new pages into the free list. Then it allocates.</li>
+</ol>
+<p>When <code>pgm_free_page()</code> is called, the page is zeroed and pushed onto the front of the free list. Page 0 cannot be freed.</p>
+<p>The initial file is 64 pages, which is 256KB. Pages 1 through 63 form the initial free list.</p>
+
+<h2 id="buffer-pool">Buffer Pool</h2>
+<p>All page I/O flows through a Clock Sweep buffer pool in <code>buffer_pool.h/c</code>. It is modeled after PostgreSQL's buffer manager. The pool caches 4KB pages in memory. It uses write-back semantics. Dirty pages are flushed to disk only on eviction or on an explicit flush.</p>
+<p><strong>Key parameters.</strong></p>
+<table>
+<thead><tr><th>Constant</th><th>Value</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td><code>BP_PAGE_SIZE</code></td><td>4096</td><td>Cache page granularity</td></tr>
+<tr><td><code>BP_DEFAULT_PAGES</code></td><td>256</td><td>Default pool size (1MB)</td></tr>
+<tr><td><code>BP_MAX_USAGE</code></td><td>5</td><td>Maximum usage count per page</td></tr>
+<tr><td><code>BP_RING_SIZE</code></td><td>8</td><td>Sequential scan ring buffer slots</td></tr>
+</tbody>
+</table>
+<p><strong>Clock Sweep algorithm.</strong> A clock hand rotates through all buffer slots. When a victim is needed, the pool checks each slot in turn.</p>
+<ul>
+<li>If <code>pin_count &gt; 0</code>, skip the page. It is in use.</li>
+<li>If <code>usage_count == 0</code>, select the page as the victim. Flush it to disk if it is dirty, then evict it.</li>
+<li>Otherwise, decrement <code>usage_count</code> and advance the hand.</li>
+</ul>
+<p>Each cache hit increments <code>usage_count</code>, up to <code>BP_MAX_USAGE</code>. This gives frequently accessed pages more chances to survive eviction sweeps.</p>
+<p><strong>Anti-pollution ring buffer.</strong> Sequential scans use <code>bp_read_seq()</code> with a private <code>BPRing</code>. The ring has 8 slots and works round-robin. This stops large table scans from evicting hot pages from the main pool.</p>
+<p><strong>Core API.</strong></p>
+<pre><code><span class="c-key">void</span> <span class="c-fn">bp_init</span>(<span class="c-key">int</span> num_pages);           <span class="c-com">/* allocate pool */</span>
+<span class="c-key">int</span>  <span class="c-fn">bp_read</span>(<span class="c-key">int</span> fd, <span class="c-key">void</span> *buf, <span class="c-key">size_t</span> count, <span class="c-key">off_t</span> offset);
+<span class="c-key">int</span>  <span class="c-fn">bp_write</span>(<span class="c-key">int</span> fd, <span class="c-key">const void</span> *buf, <span class="c-key">size_t</span> count, <span class="c-key">off_t</span> offset);
+<span class="c-key">void</span> <span class="c-fn">bp_flush_all</span>(<span class="c-key">void</span>);               <span class="c-com">/* write all dirty pages to disk */</span>
+<span class="c-key">void</span> <span class="c-fn">bp_flush_fd</span>(<span class="c-key">int</span> fd);              <span class="c-com">/* flush dirty pages for one fd */</span>
+<span class="c-key">void</span> <span class="c-fn">bp_invalidate_fd</span>(<span class="c-key">int</span> fd);         <span class="c-com">/* flush + drop all pages for fd */</span></code></pre>
+<p>The pool uses an open-addressing hash table for fast lookup. The table is 4 times the pool size and uses linear probing. It is keyed by <code>(fd, page_no)</code> for O(1) page lookup. An internal mutex serializes all pool operations for thread safety.</p>
+
+<h2 id="components">Component Summary</h2>
+
+<h3 id="page-manager">Page Manager (<code>page_mgr.h/c</code>)</h3>
+<p>The page manager manages the global <code>evosql.db</code> file. It provides page allocation and deallocation, free list management, file growth, and access to file header fields. The header fields include the catalog root pages and the auto-increment counters. All reads and writes delegate to the buffer pool.</p>
+<p>See <a href="/3.0/page-manager-and-slotted-pages/">Page Manager and Slotted Pages</a>.</p>
+
+<h3 id="slotted-pages">Slotted Pages (<code>slotted.h/c</code>)</h3>
+<p>Slotted pages store variable-length records within a single 4KB data page. The page layout is shown below.</p>
+<pre><code>[PageHeader 16B][SlottedHeader 6B][Slot Directory --&gt;]
+                   [ FREE SPACE ]
+                [&lt;-- Records packed from end of page]</code></pre>
+<p>Each record is identified by a <code>RowID = {page_no, slot_idx}</code>, which is 6 bytes. A <code>RowID</code> with <code>page_no == 0</code> is the "deleted" sentinel. This works because page 0 is always the file header. The slot directory grows forward. Records grow backward. Deleted slots can be reused. <code>slot_compact()</code> defragments records to reclaim space from deletions.</p>
+<p>Maximum record size is <code>4096 - 16 - 6 - 4 = 4070 bytes</code>.</p>
+<p>See <a href="/3.0/page-manager-and-slotted-pages/">Page Manager and Slotted Pages</a>.</p>
+
+<h3 id="bplus-tree">B+ Tree (<code>btree2.h/c</code>)</h3>
+<p>The B+ tree provides O(log n) key-to-RowID indexing. Each B+ tree node occupies one 4KB page. Leaf nodes are doubly linked for efficient sequential and range scans.</p>
+<p><strong>Key format.</strong> The key is a length-prefixed string. It uses 1 byte for the length followed by up to 255 bytes of data. Key comparison is numeric-aware. If both keys parse as numbers, they are compared as <code>double</code>. Otherwise lexicographic comparison is used.</p>
+<p><strong>Leaf entry.</strong> <code>[key_len:1][key_data:N][RowID:6]</code></p>
+<p><strong>Internal entry.</strong> <code>[child0:4][key0_len:1][key0:N][child1:4]...</code></p>
+<p>Insertions handle splits automatically. They propagate separator keys up to the parent and create a new root when needed. Deletions use lazy marking. They set the RowID to <code>{0, 0}</code>.</p>
+<p>Cursor operations traverse the leaf chain for ordered iteration. These are <code>bt2_cursor_first</code>, <code>bt2_cursor_next</code>, and <code>bt2_cursor_seek</code>.</p>
+<p>See <a href="/3.0/bplus-tree/">B+ Tree</a>.</p>
+
+<h3 id="system-catalog">System Catalog (<code>catalog_internal.h/c</code>)</h3>
+<p>The system catalog stores all metadata in 8 B+ trees. There is one tree per catalog table.</p>
+<table>
+<thead><tr><th>CatalogID</th><th>Tree</th><th>Key Format</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td>0</td><td><code>CAT_SYS_DATABASES</code></td><td><code>db_name</code></td><td>Database registry</td></tr>
+<tr><td>1</td><td><code>CAT_SYS_SCHEMAS</code></td><td><code>db_id:schema_name</code></td><td>Schemas per database</td></tr>
+<tr><td>2</td><td><code>CAT_SYS_TABLES</code></td><td><code>schema_id:table_name</code></td><td>Tables per schema</td></tr>
+<tr><td>3</td><td><code>CAT_SYS_COLUMNS</code></td><td><code>table_id:col_ordinal</code></td><td>Column definitions</td></tr>
+<tr><td>4</td><td><code>CAT_SYS_INDEXES</code></td><td><code>table_id:index_name</code></td><td>Index metadata</td></tr>
+<tr><td>5</td><td><code>CAT_SYS_CONSTRAINTS</code></td><td><code>table_id:ordinal</code></td><td>CHECK, UNIQUE, PK, FK</td></tr>
+<tr><td>6</td><td><code>CAT_SYS_USERS</code></td><td><code>username</code></td><td>User credentials</td></tr>
+<tr><td>7</td><td><code>CAT_SYS_GRANTS</code></td><td><code>username:scope_type:scope_name</code></td><td>Privilege grants</td></tr>
+</tbody>
+</table>
+<p>Composite keys use zero-padded 10-digit IDs with a <code>:</code> separator. An example is <code>"0000000001:tablename"</code>. Catalog records are stored as semicolon-delimited strings on slotted pages. The B+ tree entries point to those records. Root page numbers for all 8 trees are persisted in the file header's <code>catalog_roots[]</code> array.</p>
+<p>See <a href="/3.0/system-catalog/">System Catalog</a>.</p>
+
+<h3 id="table-api">Table API (<code>table_api.h/c</code>)</h3>
+<p>The Table API bridges the DML modules and the storage layers. It provides the following operations.</p>
+<dl class="params">
+<dt>Table resolution</dt>
+<dd><code>tapi_resolve()</code> looks up a table by name using the catalog. It returns a <code>TableDesc</code> and arrays of <code>ColumnDesc</code>.</dd>
+<dt>Heap operations</dt>
+<dd><code>tapi_heap_insert()</code>, <code>tapi_heap_read()</code>, <code>tapi_heap_delete()</code>, and <code>tapi_heap_update()</code> manage records on slotted pages. Pages are chained through <code>next_page</code> in the page header. New pages are allocated when existing ones are full.</dd>
+<dt>PK key building</dt>
+<dd><code>tapi_build_pk_key()</code> extracts the primary key columns from a semicolon-delimited record. It builds the B+ tree key string. A single column gives <code>"value"</code>. A composite key gives <code>"val1|val2"</code>.</dd>
+<dt>Table scan</dt>
+<dd><code>tapi_scan_begin()</code> and <code>tapi_scan_next()</code> iterate all records ordered by primary key. They use the PK B+ tree cursor. Each cursor step reads the RowID from the B+ tree. Then it fetches the full record from the heap page.</dd>
+<dt>Cleanup</dt>
+<dd><code>tapi_free_heap_pages()</code> walks the heap chain and frees all pages. This is used by DROP TABLE.</dd>
+</dl>
+<p>See <a href="/3.0/table-api-and-dml/">Table API and DML</a>.</p>
+
+<h2 id="data-flow">Data Flow</h2>
+
+<h3 id="flow-insert">INSERT</h3>
+<pre><code>SQL: INSERT INTO employees (id, name) VALUES (1, 'Alice');
+
+ evoparser.y (parse + emit RPN)
+      |
+ Insert.c  InsertProcess()
+      |
+      +-- tapi_resolve("employees") --&gt; TableDesc, ColumnDesc[]
+      |
+      +-- tapi_build_pk_key(cols, record) --&gt; "1"
+      |
+      +-- bt2_search(pk_tree, "1") --&gt; check for duplicate PK
+      |
+      +-- tapi_heap_insert(td, "1;Alice") --&gt; RowID{page=5, slot=3}
+      |       |
+      |       +-- pgm_read_page(heap_page)    (via buffer pool)
+      |       +-- slot_insert(page_buf, record)
+      |       +-- pgm_write_page(heap_page)   (via buffer pool)
+      |
+      +-- bt2_insert(pk_tree, "1", RowID{5,3})
+              |
+              +-- find_leaf() --&gt; descend internal nodes
+              +-- write entry to leaf page (split if full)
+              +-- pgm_write_page()            (via buffer pool)</code></pre>
+
+<h3 id="flow-select-scan">SELECT (full scan)</h3>
+<pre><code>SQL: SELECT * FROM employees;
+
+ Select.c  SelectProcess()
+      |
+      +-- tapi_resolve("employees") --&gt; TableDesc, ColumnDesc[]
+      |
+      +-- tapi_scan_begin(td, &amp;cursor) --&gt; positions at first PK
+      |
+      +-- loop: tapi_scan_next(&amp;cursor, pk_key, record_buf)
+              |
+              +-- bt2_cursor_next() --&gt; RowID
+              +-- tapi_heap_read(RowID) --&gt; "1;Alice"
+              +-- apply WHERE filter (expression.c)
+              +-- emit row to result set</code></pre>
+
+<h3 id="flow-select-pk">SELECT (PK lookup)</h3>
+<pre><code>SQL: SELECT * FROM employees WHERE id = 1;
+
+ Select.c  SelectProcess()
+      |
+      +-- tapi_resolve("employees")
+      +-- tapi_build_pk_key(cols, where_val) --&gt; "1"
+      +-- bt2_search(pk_tree, "1") --&gt; RowID{5,3}
+      +-- tapi_heap_read(RowID{5,3}) --&gt; "1;Alice"</code></pre>
+
+<h3 id="flow-delete">DELETE</h3>
+<pre><code> Delete.c  DeleteProcess()
+      |
+      +-- tapi_scan_begin/next --&gt; find matching rows
+      +-- bt2_delete(pk_tree, pk_key) --&gt; lazy-mark RowID as {0,0}
+      +-- tapi_heap_delete(RowID)     --&gt; slot_delete on page</code></pre>
+
+<h3 id="flow-update">UPDATE</h3>
+<pre><code> Update.c  UpdateProcess()
+      |
+      +-- tapi_scan_begin/next --&gt; find matching rows
+      +-- tapi_heap_update(td, old_rid, new_record)
+      |       |
+      |       +-- slot_update() if fits in-place --&gt; done
+      |       +-- otherwise: slot_delete() + tapi_heap_insert() --&gt; new RowID
+      |
+      +-- if RowID changed: bt2_update(pk_tree, pk_key, new_rid)</code></pre>
+
+<h2 id="initialization">Initialization</h2>
+<p>Server startup calls <code>db_ensure_root()</code> in <code>DatabaseMgmt.c</code>. This triggers the full initialization sequence.</p>
+<pre><code>db_ensure_root()
+    |
+    +-- mkdir("root/")                     create data directory
+    |
+    +-- pgm_init("root/evosql.db")         open or create the global file
+    |       |
+    |       +-- (if file exists) validate magic + page_size, load header
+    |       +-- (if file absent) create file, write FileHeader to page 0,
+    |           chain pages 1..63 into free list (256KB initial)
+    |
+    +-- cat_init()                         initialize system catalog
+    |       |
+    |       +-- (first run) create 8 B+ trees, store roots in file header,
+    |       |   insert default database ("evosql") and schema ("default")
+    |       +-- (subsequent runs) load tree roots from file header
+    |
+    +-- db_ensure_users()                  create admin user if absent
+    |       |
+    |       +-- cat_find_user("admin")
+    |       +-- if not found: cat_create_user("admin", hashed_password)
+    |
+    +-- db_ensure_grants()                 create admin superuser grant
+            |
+            +-- cat_find_grant("admin", DATABASE, "*")
+            +-- if not found: cat_create_grant("admin", DATABASE, "*", "ALL", 1)</code></pre>
+<div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div>The buffer pool must be initialized before <code>pgm_init()</code>. The call is <code>bp_init()</code>. All page I/O depends on the buffer pool. The adaptor's <code>server.c</code> calls <code>bp_init()</code> during server startup before it invokes <code>db_ensure_root()</code>.</div></div>
+
+<h2 id="building-testing">Building and Testing</h2>
+<p>Standalone C tests validate each layer independently.</p>
+<pre><code><span class="c-com"># Page Manager + Slotted Pages (18 tests)</span>
+gcc -Wall -g -I../evolution/db -o test_page_mgr test_page_mgr.c \
+    ../evolution/db/page_mgr.c ../evolution/db/slotted.c \
+    ../evolution/db/buffer_pool.c ../evolution/db/error.c \
+    ../evolution/db/database_globals.c ../evolution/db/query_context.c -lpthread
+
+<span class="c-com"># B+ Tree (13 tests)</span>
+gcc -Wall -g -I../evolution/db -o test_btree2 test_btree2.c \
+    ../evolution/db/btree2.c ../evolution/db/page_mgr.c \
+    ../evolution/db/slotted.c ../evolution/db/buffer_pool.c \
+    ../evolution/db/error.c ../evolution/db/database_globals.c \
+    ../evolution/db/query_context.c -lpthread
+
+<span class="c-com"># System Catalog (30 tests)</span>
+gcc -Wall -g -I../evolution/db -o test_catalog test_catalog.c \
+    ../evolution/db/catalog_internal.c ../evolution/db/btree2.c \
+    ../evolution/db/page_mgr.c ../evolution/db/slotted.c \
+    ../evolution/db/buffer_pool.c ../evolution/db/error.c \
+    ../evolution/db/database_globals.c ../evolution/db/query_context.c -lpthread</code></pre>
+<p>Integration tests use the Python test suite against a running server. See the project README for details.</p>
+</main></div>
+<script src="/version.js"></script>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>
